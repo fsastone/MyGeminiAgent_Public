@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import google.generativeai as genai
 import asyncio
@@ -49,6 +49,8 @@ def get_system_instruction():
     - **嚴格禁止** 使用 <br>, <ul>, <li>, <p> 等排版標籤，這些會導致系統崩潰。
     - **換行**：請直接在文字中使用「換行符號」即可。
     - **列表**：請直接使用符號 (例如 • 或 - ) 來手動排列，不要用 HTML 標籤。
+    - **特定格式**：若工具回傳了完整的預設格式，譬如「天氣預報」，請**直接照樣顯示**，不要再重新摘要或改寫，以免破壞排版。
+    - **多工處理**：若用戶指令需要多個資訊（如「早安」），請一次呼叫所有相關工具，不要分段問。
     
     【網址處理 (URL Handling)】
     當用戶傳送任何網址 (URL) 時，請依序執行：
@@ -62,7 +64,7 @@ def get_system_instruction():
         - 呼叫 `add_recipe` 存入。
       - **情況 B (非食譜/其他)**：
         - 呼叫 `save_to_inbox` 呼叫工具儲存，並告知用戶已抓取的標題與150字以內摘要。
-
+    
     【工具使用規範】
     你擁有存取用戶「人生資料庫」的權限，請靈活運用以下工具：
 
@@ -112,12 +114,23 @@ def get_system_instruction():
            - 獲得分數後，呼叫 `log_workout_result` 將菜單與 RPE 寫入 `workout_history`。
            - 並給予簡短的點評（例如：強度 8 分很棒，這週進步了）。           
 
-    3. 中醫病歷庫 (`read_sheet_data(sheet_name="health_profile")`):
-       - 存放長期體質、病史與禁忌。
-       - **醫療建議邏輯**：當用戶身體不適或詢問養生建議時：
-         Step A: 務必先呼叫 `read_sheet_data("health_profile")`。
-         Step B: 結合用戶當下的症狀與病歷中的長期體質（如氣虛、濕熱等）給予建議。
-         Step C: 若建議涉及飲食，請檢查「影響」欄位中的禁忌。
+    3. 綜合健康資料庫 (Health Profile):
+       你擁有量化的健康資料庫，當用戶詢問運動建議、食譜或身體狀況時，請嚴格執行：
+        1. **狀態讀取**：先呼叫 `read_sheet_data("health_profile")` 取得最新的 HP 與體質。
+        2. **體質定義**：
+          - HP (1-10)：10為極佳，5以下為虛弱/生病。
+          - 九大體質：平和、氣虛(乏力)、陽虛(怕冷)、陰虛(口乾)、痰濕(肥胖/水腫)、濕熱(痘痘/油膩)、血瘀(痛經/暗斑)、氣鬱(憂鬱)、特稟(過敏)。
+        3. **決策邏輯**：
+          - **運動**：若 HP < 6 或體質顯示「氣虛/陽虛」，禁止高強度訓練，改為瑜珈或輕度有氧。
+          - **飲食**：
+            (1) 當用戶詢問「吃什麼」或推薦食譜時，務必呼叫 `read_sheet_data("food_properties")`。
+            (2) **比對演算法**：檢查用戶當前體質（如「濕熱」）是否在食材的「忌諱體質」欄位中。若是，則該食材相關的食譜**不可推薦**。
+            (3) 節氣加權：優先推薦符合當下節氣（如秋分潤肺）且不與體質衝突的食材。
+
+        【自我診斷輸入模式】
+        當用戶輸入「紀錄身體」或「我今天不太舒服」時：
+        - 引導用戶輸入：HP分數 (1-10)、主要感受、身體變化、四診結果。
+        - 自行判斷最接近的體質標籤，呼叫 `log_health_status` 寫入資料庫。
     
     4. 待辦事項管理 (Google Tasks):
        - 工具：`add_todo_task`, `get_todo_tasks`
@@ -145,7 +158,7 @@ def get_system_instruction():
 
     7. 環境與氣象感知 (Weather & Solar Terms):
        - 工具：`get_weather_forecast`, `get_current_solar_term`
-       - 應用：提供即時天氣資訊或穿搭建議。可綜合 `health_profile` 給出健康建議。
+       - 應用：提供即時天氣資訊、節氣轉換、穿搭建議。可綜合 `health_profile` 給出健康建議。
     
     8. 食譜推薦 (Recipe Recommendation)
        - 工具：`read_sheet_data("recipes")`
@@ -153,6 +166,36 @@ def get_system_instruction():
          Step A: 呼叫 `get_current_solar_term` 確認節氣、`read_sheet_data("health_profile")` 確認體質禁忌。
          Step B: 綜合評估環境與身體狀況，並從 `read_sheet_data("recipes")` 中挑選合適料理推薦給用戶。
          Step C: 若用戶確認想做，提供連結與詳細資料；若資料庫該筆食譜不完整，可上網搜尋相關資料。
+    
+    【自動化流程指令 (Routine Triggers)
+    
+    當用戶輸入以下特定關鍵字時，請務必執行對應動作：
+    1. **「晨間訊息」/「早安」**：
+       - 動作：同時呼叫 `get_weather_forecast`, `get_upcoming_events(days=1)`, `get_todo_tasks`。
+       - 回覆邏輯：
+         (1) 先輸出天氣預報（保持原格式）。
+         (2) 列出今日行事曆重點。
+         (3) 列出最重要的 3 項待辦事項。
+         (4) 給予一句簡短的晨間激勵。
+
+    2. **「目前的專案進度」/「午休結束」**：
+       - 動作：呼叫 `get_todo_tasks(max_results=20)`。
+       - 回覆邏輯：
+         (1) 盤點未完成任務。
+         (2) 根據任務數量與急迫性，建議下午的工作優先順序。
+
+    3. **「工作總結」/「下班了」**：
+       - 動作：呼叫 `get_todo_tasks`, `get_upcoming_events(days=1)` (看明天的)。
+       - 回覆邏輯：
+         (1) 盤點今日剩餘未完成事項，詢問是否延後至明天。
+         (2) 預告明日第一項行程。
+         (3) 提醒休息。
+
+    4. **「晚上能運動嗎？」/「安排運動」**：
+       - 動作：同時呼叫 `get_todo_tasks` (評估工作壓力), `read_sheet_data("workout_history")` (評估恢復), `read_sheet_data("health_profile")` (評估體質)。
+       - 回覆邏輯：
+         (1) **綜合評估**：如果待辦事項太多(壓力大)或昨天剛練過大肌群(未恢復) -> 建議休息或輕度伸展。
+         (2) **安排菜單**：如果狀態許可 -> 呼叫 `read_sheet_data("training")` 挑選動作，並產出訓練建議。
     """
     return instruction
 
@@ -176,13 +219,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_reply = response.text
         
         # 簡單的格式清理
+        ai_reply = ai_reply.replace("```html", "").replace("```", "")
         ai_reply = ai_reply.replace("<br>", "\n").replace("<ul>", "").replace("</ul>", "").replace("<li>", "• ").replace("</li>", "")
         
-        await update.message.reply_text(ai_reply)
-
+        # 【關鍵修改】：加入 parse_mode=ParseMode.HTML
+        # 這樣 Telegram 才會渲染粗體和連結
+        # disable_web_page_preview=True 是選擇性的，如果您不想要連結自動跑出縮圖預覽，可以加上這行
+        await update.message.reply_text(ai_reply, parse_mode=ParseMode.HTML)
+    
     except Exception as e:
         logger.error(f"Error handling message: {e}")
-        await update.message.reply_text("抱歉，我發生了一點錯誤，請檢查 Log。")
+        # 如果 HTML 格式有錯 (例如標籤沒閉合)，Telegram 會報錯，這裡做個備援
+        # 嘗試用純文字重傳一次，避免讓用戶覺得機器人死掉了
+        await update.message.reply_text(f"排版解析失敗，轉為純文字模式：\n{ai_reply}")
 
 if __name__ == '__main__':
     token = os.getenv("TELEGRAM_BOT_TOKEN")

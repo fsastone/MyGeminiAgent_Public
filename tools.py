@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
 import requests
 from bs4 import BeautifulSoup
 import urllib3
@@ -29,16 +30,25 @@ CWA_API_KEY = os.getenv("CWA_API_KEY")
 def get_google_service(service_name, version):
     """
     動態取得 Google 服務連線。
-    這樣做的好處是：只有在真的要用功能時才會連線，
-    如果啟動時網路不通，不會導致整個程式崩潰。
+    (含自動更新 Token 功能)
     """
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     
+    # 關鍵修改區塊：自動更新 Token
     if not creds or not creds.valid:
-        print("警告：憑證無效，請檢查 token.json")
-        return None
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                # 這行就是拿 Refresh Token 去換新鑰匙的動作
+                print(f"正在更新 {service_name} 的 Access Token...", flush=True)
+                creds.refresh(Request())
+            except Exception as e:
+                print(f"Token 更新失敗: {e}")
+                return None
+        else:
+            print("警告：憑證不存在或已失效且無法更新，請重新執行 setup_google.py")
+            return None
         
     try:
         service = build(service_name, version, credentials=creds)
@@ -196,25 +206,33 @@ def read_sheet_data(sheet_name: str):
                 
         elif sheet_name == "health_profile":
             # 修改點 2: 更新格式說明，讓 Agent 知道如何解讀新欄位
-            formatted_text += "格式：日期 標籤 | 變因 -> 症狀/治療 >>> AI行動準則\n"
+            formatted_text += "格式：日期 | 健康度(1-10分) | 體質 | 變化 | 細節\n"
             
             for row in data_rows:
-                # 修改點 3: 補齊至 5 欄 (Date, Tags, Factors, Record, Implications)
+                # 修改點 3: 補齊至 5 欄 (Date, HP, Constitution, Changes, Details)
                 while len(row) < 5: row.append("") 
                 
                 date = row[0]
-                tags = row[1]  # 例如: [濕熱] [睡眠]
-                factors = row[2]  # 例如: 應酬喝酒、睡眠不足
-                record = row[3]   # 例如: 舌苔黃膩、發炎
-                implications = row[4] # 例如: 需安排補眠、禁止吃辣
+                hp = row[1]  # 健康度 (1-10)
+                constitution = row[2]  # 體質
+                changes = row[3]  # 變化
+                details = row[4]  # 細節
                 
                 # 修改點 4: 組合字串，使用 >>> 強調 Action Item
                 formatted_text += (
-                    f"- {date} {tags} | "
-                    f"變因: {factors} -> "
-                    f"紀錄: {record} "
-                    f">>> 準則: {implications}\n"
+                    f"- {date} | "
+                    f"健康度: {hp} | "
+                    f"體質: {constitution} | "
+                    f"變化: {changes} | "
+                    f"細節: {details}\n"
                 )
+        elif sheet_name == "food_properties":
+            formatted_text += "格式：食材 - 性味 - 忌諱體質\n"
+            for row in data_rows:
+                while len(row) < 3: row.append("")
+                ing, prop, avoid = row[0], row[1], row[2]
+                formatted_text += f"- {ing}: {prop} (忌:{avoid})\n"
+        
         elif sheet_name == "workout_history":
             formatted_text += "格式：日期 - 菜單 - RPE - 調整建議\n"
             for row in data_rows:
@@ -561,26 +579,75 @@ def mark_inbox_as_read(row_ids_str: str):
 
 def get_current_solar_term():
     """
-    計算並回傳最近的節氣與日期。
-    (這裡使用簡易版邏輯，回傳當月可能的節氣，供 Gemini 參考)
+    精準計算目前的節氣與下一個節氣。
+    (使用簡易算法，誤差約在 1 天內，對一般生活應用足夠)
     """
-    # 24節氣列表 (簡易對照)
-    solar_terms = {
-        1: ["小寒", "大寒"], 2: ["立春", "雨水"], 3: ["驚蟄", "春分"],
-        4: ["清明", "穀雨"], 5: ["立夏", "小滿"], 6: ["芒種", "夏至"],
-        7: ["小暑", "大暑"], 8: ["立秋", "處暑"], 9: ["白露", "秋分"],
-        10: ["寒露", "霜降"], 11: ["立冬", "小雪"], 12: ["大雪", "冬至"]
-    }
-    month = datetime.now().month
-    terms = solar_terms.get(month, [])
-    return f"本月節氣：{terms[0]}, {terms[1]} (請依今日日期判斷是否已過)"
+    import bisect
+    
+    # 節氣基準表 (以 2024-2025 為例的概略日期，這可以每年微調，或用更複雜演算法)
+    # 格式: (月, 日, 節氣名稱)
+    solar_terms_data = [
+        (1, 5, "小寒"), (1, 20, "大寒"), (2, 4, "立春"), (2, 19, "雨水"),
+        (3, 5, "驚蟄"), (3, 20, "春分"), (4, 4, "清明"), (4, 19, "穀雨"),
+        (5, 5, "立夏"), (5, 21, "小滿"), (6, 5, "芒種"), (6, 21, "夏至"),
+        (7, 7, "小暑"), (7, 22, "大暑"), (8, 7, "立秋"), (8, 23, "處暑"),
+        (9, 7, "白露"), (9, 23, "秋分"), (10, 8, "寒露"), (10, 23, "霜降"),
+        (11, 7, "立冬"), (11, 22, "小雪"), (12, 7, "大雪"), (12, 21, "冬至")
+    ]
+    
+    now = datetime.now()
+    year = now.year
+    
+    # 建立當年度的時間戳記列表
+    dates = []
+    term_names = []
+    for month, day, name in solar_terms_data:
+        try:
+            d = datetime(year, month, day)
+            dates.append(d)
+            term_names.append(name)
+        except:
+            pass # 處理閏年日期可能的微小誤差
+
+    # 找到今天在列表中的位置
+    idx = bisect.bisect_right(dates, now)
+    
+    # 取得「當下/最近」的節氣 (上一個)
+    current_term = term_names[idx - 1] if idx > 0 else term_names[-1]
+    current_term_date = dates[idx - 1] if idx > 0 else dates[-1]
+
+    # 取得「下一個」節氣
+    if idx < len(dates):
+        next_term = term_names[idx]
+        next_term_date = dates[idx]
+    else:
+        # 跨年處理
+        next_term = solar_terms_data[0][2]
+        next_term_date = datetime(year + 1, solar_terms_data[0][0], solar_terms_data[0][1])
+
+    days_until = (next_term_date - now).days + 1
+    
+    msg = f"目前節氣：{current_term} (已過 {abs((now - current_term_date).days)} 天)\n"
+    msg += f"下個節氣：{next_term} (再 {days_until} 天)"
+    
+    # 特別提醒：如果是節氣轉換前後 2 天
+    if days_until <= 2:
+        msg += f"\n>>> 注意：即將進入 {next_term}，請注意氣候轉換與調養！"
+    elif abs((now - current_term_date).days) <= 1:
+        msg += f"\n>>> 注意：正值 {current_term} 節氣轉換期！"
+        
+    return msg
 
 def get_weather_forecast(location: str = "臺北市"):
     """
-    呼叫中央氣象署 API 取得未來 36 小時天氣預報。
+    呼叫中央氣象署 API 取得精簡版天氣預報 (純數據版)。
+    回傳格式範例：
+    【臺北市今日天氣】
+    - 下午 🌥️晴時多雲 🌂0% 🌡️20 - 25℃
+    - 晚間 🌥️晴時多雲 ☂️10% 🌡️17 - 20℃
     """
     if not CWA_API_KEY:
-        return "錯誤：找不到 CWA_API_KEY，請檢查 .env"
+        return "錯誤：找不到 CWA_API_KEY"
 
     api_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={CWA_API_KEY}&format=JSON&locationName={location}"
 
@@ -594,27 +661,87 @@ def get_weather_forecast(location: str = "臺北市"):
 
         location_data = data['records']['location'][0]
         elements = location_data['weatherElement']
-        
-        forecast_report = f"【{location} 未來天氣預報】\n"
-        
+        # elements index: 0=Wx(現象), 1=PoP(降雨%), 2=MinT, 3=CI(舒適度), 4=MaxT
+        report_lines = []
+           
+        # 只需要前兩筆預報 (通常是 12小時 + 12小時)
         for i in range(0, 2):
-            time_start = elements[0]['time'][i]['startTime'][5:-3]
-            time_end = elements[0]['time'][i]['endTime'][5:-3]
+            start_str = elements[0]['time'][i]['startTime'] # Format: YYYY-MM-DD HH:MM:SS
+            # 抓取小時 (例如 12:00:00 -> 12)
+            hour = int(start_str.split(' ')[1].split(':')[0])
             
-            wx = elements[0]['time'][i]['parameter']['parameterName']
-            pop = elements[1]['time'][i]['parameter']['parameterName']
+            # --- 1. 時段顯示名稱 ---
+            if 5 <= hour < 11: time_desc = "早晨"
+            elif 11 <= hour < 13: time_desc = "中午"
+            elif 13 <= hour < 17: time_desc = "下午"
+            elif 17 <= hour < 19: time_desc = "傍晚"
+            elif 19 <= hour < 23: time_desc = "晚間"
+            else: time_desc = "深夜"
+
+            # --- 2. 數值取得 ---
+            wx_name = elements[0]['time'][i]['parameter']['parameterName'] # 天氣現象
+            pop_val = int(elements[1]['time'][i]['parameter']['parameterName']) # 降雨機率
             min_t = elements[2]['time'][i]['parameter']['parameterName']
-            ci = elements[3]['time'][i]['parameter']['parameterName']
             max_t = elements[4]['time'][i]['parameter']['parameterName']
+
+            # --- 3. Emoji 邏輯 ---
+            if "雷" in wx_name: wx_icon = "⛈️"
+            elif "雨" in wx_name: wx_icon = "🌧️"
+            elif "雲" in wx_name or "陰" in wx_name: wx_icon = "🌥️"
+            else: # 晴天相關
+                # 判斷是白天還是晚上 (06~18為白天)
+                is_daytime = 6 <= hour < 18
+                wx_icon = "☀️" if is_daytime else "🌙"
+
+            pop_icon = "🌂" if pop_val == 0 else ("☂️" if pop_val <= 50 else "☔")
             
-            forecast_report += f"[{time_start} ~ {time_end}]\n"
-            forecast_report += f"• {wx} (降雨機率 {pop}%)\n"
-            forecast_report += f"• 氣溫: {min_t}-{max_t}°C ({ci})\n"
+            # --- 4. 組合字串 ---
+            # 格式: - 下午 🌥️晴時多雲 🌂0% 🌡️20 - 25℃
+            line = f"- {time_desc} {wx_icon}{wx_name} {pop_icon}{pop_val}% 🌡️{min_t} - {max_t}℃"
+            report_lines.append(line)
             
-        return forecast_report
+        # 組合最終輸出
+        header = f"【{location}今日天氣】"
+        body = "\n".join(report_lines)
+    
+        return f"{header}\n{body}"
 
     except Exception as e:
         return f"天氣查詢失敗: {str(e)}"
+
+def log_health_status(hp: int, constitution: str, changes: str = "", details: str = ""):
+    """
+    [Health 2.0] 記錄每日身體數值與體質狀態。
+    
+    Args:
+        hp (int): 整體健康/精神分數 (1-10)。
+        constitution (str): 當下體質判定 (平和/氣虛/陽虛/陰虛/痰濕/濕熱/血瘀/氣鬱/特稟)。
+        changes (str): 身體變化 (例如：睡很少、吃了麻辣鍋、生理期)。
+        details (str): 詳細症狀或備註。
+    """
+    service = get_google_service('sheets', 'v4') 
+    if not service: return "錯誤：無法連線至 Google Sheets"
+
+    valid_constitutions = ["平和", "氣虛", "陽虛", "陰虛", "痰濕", "濕熱", "血瘀", "氣鬱", "特稟"]
+    if constitution not in valid_constitutions:
+        return f"體質分類錯誤，請從以下選擇：{valid_constitutions}"
+
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        # 欄位順序：Date, HP, Constitution, Changes, Details
+        values = [[today, hp, constitution, changes, details]]
+        body = {'values': values}
+        
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="health_profile!A:E", # 寫入新結構
+            valueInputOption="USER_ENTERED",
+            body=body
+        ).execute()
+        
+        return f"已記錄健康狀態：HP={hp}, 體質={constitution}"
+    except Exception as e:
+        return f"記錄失敗: {str(e)}"
 
 def get_youtube_video_id(url):
     """
