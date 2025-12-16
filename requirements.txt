@@ -1,11 +1,9 @@
-python-telegram-bot
+python-telegram-bot[webhooks]
 google-generativeai
+google-api-python-client
 google-auth-oauthlib
 google-auth
-google-api-python-client
 python-dotenv
 beautifulsoup4
 requests
 youtube-transcript-api
-gunicorn
-flask

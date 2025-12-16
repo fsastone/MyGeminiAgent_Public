@@ -15,69 +15,60 @@ load_dotenv()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 設定全域變數與服務 ---
-
 SCOPES = [
     'https://www.googleapis.com/auth/calendar',
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/tasks'
 ]
-
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 CWA_API_KEY = os.getenv("CWA_API_KEY")
 
-def get_google_creds():
-    """統一取得憑證的函數"""
+# --- 關鍵修改：移除全域 Service 物件，改用函數取得 ---
+# 舊程式碼這裡會直接連線，導致啟動失敗。我們把它拿掉。
+
+def get_google_service(service_name, version):
+    """
+    動態取得 Google 服務連線。
+    這樣做的好處是：只有在真的要用功能時才會連線，
+    如果啟動時網路不通，不會導致整個程式崩潰。
+    """
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     
     if not creds or not creds.valid:
-        # 這裡單純拋出錯誤，讓使用者知道要去重跑 setup
-        raise Exception("憑證無效或過期，請刪除 token.json 並重新執行 setup_google.py")
-    
-    return creds
-
-# 為了效能，我們建立全域服務物件，這樣不用每次呼叫函數都重新連線
-try:
-    creds = get_google_creds()
-    calendar_service = build('calendar', 'v3', credentials=creds)
-    sheets_service = build('sheets', 'v4', credentials=creds)
-    tasks_service = build('tasks', 'v1', credentials=creds)
-    print("Google Services 連線成功")
-except Exception as e:
-    print(f"Google Services 初始化失敗: {e}")
-    calendar_service = None
-    sheets_service = None
+        print("警告：憑證無效，請檢查 token.json")
+        return None
+        
+    try:
+        service = build(service_name, version, credentials=creds)
+        return service
+    except Exception as e:
+        print(f"連線 {service_name} 失敗: {e}")
+        return None
 
 # --- 工具函數區 ---
 
 def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60, description: str = ""):
     """在 Google 日曆上建立活動。"""
-    if not calendar_service:
-        return "錯誤：日曆服務未連線"
+    service = get_google_service('calendar', 'v3') 
+    if not service:
+        return "錯誤：無法連線至 Google Calendar"
 
     try:
+        # ... (原本的邏輯保持不變，將 calendar_service 替換為 service) ...
         start_dt = datetime.fromisoformat(start_time)
         end_dt = start_dt + timedelta(minutes=duration_minutes)
-        end_time = end_dt.isoformat()
-
         event = {
             'summary': summary,
             'description': description,
             'start': {'dateTime': start_time, 'timeZone': 'Asia/Taipei'},
-            'end': {'dateTime': end_time, 'timeZone': 'Asia/Taipei'},
+            'end': {'dateTime': end_dt.isoformat(), 'timeZone': 'Asia/Taipei'},
         }
-
-        created_event = calendar_service.events().insert(
-            calendarId='primary',
-            body=event
-        ).execute()
-
+        created_event = service.events().insert(calendarId='primary', body=event).execute()
         return f"成功建立活動：{created_event.get('htmlLink')}"
-
     except Exception as e:
-        # 回傳詳細錯誤給 Gemini，這樣 print 出來我們才看得到
-        return f"建立活動失敗 (Error): {str(e)}"
+        return f"建立活動失敗: {e}"
 
 def get_upcoming_events(days: int = 1):
     """
@@ -89,8 +80,9 @@ def get_upcoming_events(days: int = 1):
     Args:
         days (int): 要讀取未來幾天的資料，預設為 1 天 (讀取今天與明天的行程)。
     """
-    if not calendar_service:
-        return "錯誤：日曆服務未連線"
+    service = get_google_service('calendar', 'v3') 
+    if not service:
+        return "錯誤：無法連線至 Google Calendar"
 
     try:
         # 準備時間範圍 (UTC 時間)
@@ -101,7 +93,7 @@ def get_upcoming_events(days: int = 1):
         time_max = end_date.isoformat() + 'Z'
 
         # 呼叫 API
-        events_result = calendar_service.events().list(
+        events_result = service.events().list(
             calendarId='primary',
             timeMin=time_min,
             timeMax=time_max,
@@ -133,8 +125,9 @@ def get_upcoming_events(days: int = 1):
 
 def log_life_event(category: str, content: str, note: str = ""):
     """將生活事件記錄到 Google Sheets。"""
-    if not sheets_service:
-        return "錯誤：試算表服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
         
     if not SPREADSHEET_ID:
         return "錯誤：找不到 SPREADSHEET_ID，請檢查 .env 檔案"
@@ -144,7 +137,7 @@ def log_life_event(category: str, content: str, note: str = ""):
         values = [[today, category, content, note]]
         body = {'values': values}
         
-        result = sheets_service.spreadsheets().values().append(
+        result = service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
             range="logs!A:D", # 確保你的分頁名稱真的是 logs
             valueInputOption="USER_ENTERED",
@@ -166,8 +159,9 @@ def read_sheet_data(sheet_name: str):
             - "training": 讀取健身動作庫 (欄位: 肌群, 名稱, 強度, 注意事項)
             - "health_profile": 讀取長期病歷與體質 (欄位: date, tags, factors, record, implications)
     """
-    if not sheets_service:
-        return "錯誤：試算表服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
     
     valid_sheets = ["training", "health_profile", "workout_history"]
     if sheet_name not in valid_sheets:
@@ -177,7 +171,7 @@ def read_sheet_data(sheet_name: str):
         # 修改點 1: 讀取範圍擴大至 E 欄，以涵蓋新增的 'implications'
         range_name = f"{sheet_name}!A:E"
         
-        result = sheets_service.spreadsheets().values().get(
+        result = service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range=range_name
         ).execute()
@@ -251,8 +245,9 @@ def log_workout_result(menu: str, rpe: int, note: str = ""):
         rpe (int): 自覺強度 (1-10)。10代表力竭，1代表無感。
         note (str): 身體感受或調整細節。
     """
-    if not sheets_service:
-        return "錯誤：試算表服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
 
     try:
         today = datetime.now().strftime("%Y-%m-%d")
@@ -271,7 +266,7 @@ def log_workout_result(menu: str, rpe: int, note: str = ""):
         
         body = {'values': values}
         
-        sheets_service.spreadsheets().values().append(
+        service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
             range="workout_history!A:E",
             valueInputOption="USER_ENTERED",
@@ -291,12 +286,13 @@ def read_recent_logs(limit: int = 20):
     Args:
         limit (int): 要讀取的筆數，預設為最近 20 筆。
     """
-    if not sheets_service:
-        return "錯誤：試算表服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
     
     try:
         # 1. 讀取整張表 (假設你的資料不會多到爆掉，目前先讀 A 到 D 欄)
-        result = sheets_service.spreadsheets().values().get(
+        result = service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range="logs!A:D"
         ).execute()
@@ -337,8 +333,9 @@ def add_todo_task(title: str, notes: str = ""):
         title (str): 任務標題 (例如 "買牛奶", "修改 main.py").
         notes (str): 備註或細節說明.
     """
-    if not tasks_service:
-        return "錯誤：Tasks 服務未連線"
+    service = get_google_service('tasks', 'v1') 
+    if not service:
+        return "錯誤：無法連線至 Google Tasks"
 
     try:
         task_body = {
@@ -347,7 +344,7 @@ def add_todo_task(title: str, notes: str = ""):
         }
         
         # '@default' 代表使用者的預設清單
-        result = tasks_service.tasks().insert(tasklist='@default', body=task_body).execute()
+        result = service.tasks().insert(tasklist='@default', body=task_body).execute()
         
         return f"已建立待辦事項：{result.get('title')}"
 
@@ -359,12 +356,13 @@ def get_todo_tasks(max_results: int = 10):
     查詢目前未完成的待辦事項。
     當用戶問「我還有什麼事沒做？」、「查看待辦清單」時使用。
     """
-    if not tasks_service:
-        return "錯誤：Tasks 服務未連線"
+    service = get_google_service('tasks', 'v1') 
+    if not service:
+        return "錯誤：無法連線至 Google Tasks"
 
     try:
         # showCompleted=False 代表只看沒做完的
-        results = tasks_service.tasks().list(
+        results = service.tasks().list(
             tasklist='@default', 
             showCompleted=False, 
             maxResults=max_results
@@ -399,8 +397,9 @@ def save_to_inbox(url: str, note: str = ""):
         url (str): 網頁連結。
         note (str): 備註。
     """
-    if not sheets_service:
-        return "錯誤：試算表服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
 
     page_title = "未命名頁面"
     page_content_snippet = "無法抓取內文"
@@ -449,7 +448,7 @@ def save_to_inbox(url: str, note: str = ""):
         
         body = {'values': values}
         
-        sheets_service.spreadsheets().values().append(
+        service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
             range="inbox!A:E",
             valueInputOption="USER_ENTERED",
@@ -468,11 +467,12 @@ def get_unread_inbox(limit: int = 5):
     讀取 Inbox 中尚未閱讀 (Status=Unread) 的項目。
     格式優化版：標題限制 15 字，網址換行。
     """
-    if not sheets_service:
-        return "錯誤：試算表服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
 
     try:
-        result = sheets_service.spreadsheets().values().get(
+        result = service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range="inbox!A:E"
         ).execute()
@@ -519,8 +519,9 @@ def mark_inbox_as_read(row_ids_str: str):
     Args:
         row_ids_str (str): 項目 ID 字串，以逗號分隔 (例如 "2, 4, 5")。
     """
-    if not sheets_service:
-        return "錯誤：服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
 
     try:
         # 解析 ID：將 "2, 4" 轉成 [2, 4]
@@ -539,7 +540,7 @@ def mark_inbox_as_read(row_ids_str: str):
                 range_name = f"inbox!E{row_id}"
                 body = {'values': [["Read"]]}
                 
-                sheets_service.spreadsheets().values().update(
+                service.spreadsheets().values().update(
                     spreadsheetId=SPREADSHEET_ID,
                     range=range_name,
                     valueInputOption="USER_ENTERED",
@@ -728,8 +729,9 @@ def add_recipe(name: str, main_ing: str, season: str, tags: str, link: str, note
         link (str): 原始連結。
         note (str): 備註或做法摘要。
     """
-    if not sheets_service:
-        return "錯誤：試算表服務未連線"
+    service = get_google_service('sheets', 'v4') 
+    if not service:
+        return "錯誤：無法連線至 Google Sheets"
 
     try:
         # 欄位: Name, Main_Ing, Season, Tags, Link, Note
@@ -737,7 +739,7 @@ def add_recipe(name: str, main_ing: str, season: str, tags: str, link: str, note
         
         body = {'values': values}
         
-        sheets_service.spreadsheets().values().append(
+        service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
             range="recipes!A:F",
             valueInputOption="USER_ENTERED",

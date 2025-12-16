@@ -6,51 +6,33 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import google.generativeai as genai
-from telegram import Update
 import asyncio
 
 from tools import (
-    add_calendar_event,
-    log_life_event, 
-    read_recent_logs, 
-    read_sheet_data,
-    add_todo_task,
-    get_todo_tasks,
-    log_workout_result,
-    get_upcoming_events,
-    save_to_inbox,
-    get_current_solar_term,
-    get_weather_forecast,
-    add_recipe,
-    get_unread_inbox,
-    mark_inbox_as_read
+    add_calendar_event, log_life_event, read_recent_logs, read_sheet_data,
+    add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
+    save_to_inbox, get_current_solar_term, get_weather_forecast,
+    add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content
 )
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 my_tools = [
-    add_calendar_event, 
-    log_life_event, 
-    read_recent_logs, 
-    read_sheet_data,
-    add_todo_task,
-    get_todo_tasks,
-    log_workout_result,
-    get_upcoming_events,
-    save_to_inbox,
-    get_current_solar_term,
-    get_weather_forecast,
-    add_recipe,
-    get_unread_inbox,
-    mark_inbox_as_read
+    add_calendar_event, log_life_event, read_recent_logs, read_sheet_data,
+    add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
+    save_to_inbox, get_current_solar_term, get_weather_forecast,
+    add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content
 ]
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# --- 關鍵修改區開始 ---
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# 初始化 Model (注意：這裡先不放 system_instruction，改在對話時動態注入)
+model = genai.GenerativeModel('gemini-2.5-flash', tools=my_tools)
 
 def get_system_instruction():
     now = datetime.now()
@@ -174,78 +156,60 @@ def get_system_instruction():
     """
     return instruction
 
-# 注意：這裡我們不能像之前一樣在全域變數直接設定 model，
-# 因為我們希望每次對話的時間都是最新的。
-# 但為了簡單起見（且 main.py 通常會重啟），我們目前先在啟動時設定一次。
-# 更進階的做法是在每次對話回合都注入，但目前這樣已足夠解決你的問題。
-
-model = genai.GenerativeModel(
-    'gemini-2.5-flash',
-    tools=my_tools,
-    system_instruction=get_system_instruction() # <--- 呼叫函數取得帶有時間的指令
-)
-
-chat_session = model.start_chat(enable_automatic_function_calling=True)
-
-# --- 關鍵修改區結束 ---
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
     user_name = update.effective_user.first_name
-    
-    print(f"User ({user_name}): {user_input}")
+    logger.info(f"User ({user_name}): {user_input}")
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-        # 這裡有個小技巧：如果這是長久運行的程式，chat_session 裡的 system_instruction 
-        # 會停留在程式啟動的那一刻。
-        # 為了確保它永遠知道「當下」，我們可以把時間偷偷加在用戶的訊息前面。
-        # 這是最保險的做法 (Prompt Injection)。
+        # 啟動 Chat Session
+        # 這裡我們每次都動態建立 session 以確保指令是最新的
+        chat = model.start_chat(enable_automatic_function_calling=True)
         
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        prompt_with_time = f"(System Note: Current Time is {current_time}) {user_input}"
-        
-        # 傳送帶有時間戳記的訊息給 Gemini (用戶在 TG 上看不到這個 System Note)
-        response = chat_session.send_message(prompt_with_time)
-        
-        ai_reply = response.text
-        ai_reply = ai_reply.replace("<br>", "\n").replace("<br/>", "\n")
-        ai_reply = ai_reply.replace("<ul>", "").replace("</ul>", "")
-        ai_reply = ai_reply.replace("<li>", "• ").replace("</li>", "")
-        print(f"Gemini: {ai_reply}")
+        # 注入 System Instruction 與 時間
+        system_prompt = get_system_instruction()
+        full_prompt = f"{system_prompt}\n\nUser Input: {user_input}"
 
-        await update.message.reply_text(ai_reply, parse_mode='HTML')
+        response = chat.send_message(full_prompt)
+        ai_reply = response.text
+        
+        # 簡單的格式清理
+        ai_reply = ai_reply.replace("<br>", "\n").replace("<ul>", "").replace("</ul>", "").replace("<li>", "• ").replace("</li>", "")
+        
+        await update.message.reply_text(ai_reply)
 
     except Exception as e:
-        print(f"Error: {e}")
-        await update.message.reply_text("抱歉，處理過程中發生了一點錯誤，請稍後再試。")
+        logger.error(f"Error handling message: {e}")
+        await update.message.reply_text("抱歉，我發生了一點錯誤，請檢查 Log。")
 
 if __name__ == '__main__':
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    mode = os.getenv("MODE", "polling") # 預設為 polling，雲端設為 webhook
-
+    if not token:
+        raise ValueError("TELEGRAM_BOT_TOKEN 未設定！")
+        
+    mode = os.getenv("MODE", "polling") 
+    
+    # 建立 App
     app = ApplicationBuilder().token(token).build()
-    msg_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
-    app.add_handler(msg_handler)
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    print(f"全能 AI 助理 Gemini Assistant 準備啟動... 模式: {mode}")
+    print(f"Gemini Assistant 啟動中... 模式: {mode}", flush=True)
 
     if mode == "webhook":
         # Cloud Run 模式
-        # Cloud Run 會透過環境變數 PORT 告訴我們要聽哪個 Port
         port = int(os.environ.get("PORT", 8080))
-        webhook_url = os.getenv("WEBHOOK_URL") # 部屬後我們會拿到這個網址
+        webhook_url = os.getenv("WEBHOOK_URL") 
         
+        # 這裡改為「如果沒有網址，先不要崩潰，只是印出警告」
+        # 這樣可以讓伺服器先跑起來，讓我們拿到網址
         if not webhook_url:
-            raise ValueError("WEBHOOK_URL 未設定！")
-
-        # 設定 Webhook
-        async def set_webhook():
-            await app.bot.set_webhook(f"{webhook_url}/{token}")
+            logger.warning("警告：WEBHOOK_URL 未設定！機器人將無法收到訊息，但伺服器會啟動。")
+            webhook_url = "https://example.com" # 暫時給個假網址防止報錯
             
-        # 這裡我們使用 python-telegram-bot 內建的 run_webhook
-        # 它底層其實就是一個簡單的 web server
+        print(f"正在監聽 Port: {port}, Webhook: {webhook_url}", flush=True)
+
         app.run_webhook(
             listen="0.0.0.0",
             port=port,
