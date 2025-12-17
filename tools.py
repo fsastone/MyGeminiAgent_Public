@@ -1,6 +1,7 @@
 import os
 import logging
 from datetime import datetime, timedelta
+from unicodedata import category
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -133,33 +134,6 @@ def get_upcoming_events(days: int = 1):
     except Exception as e:
         return f"讀取日曆失敗 (Error): {str(e)}"
 
-def log_life_event(category: str, content: str, note: str = ""):
-    """將生活事件記錄到 Google Sheets。"""
-    service = get_google_service('sheets', 'v4') 
-    if not service:
-        return "錯誤：無法連線至 Google Sheets"
-        
-    if not SPREADSHEET_ID:
-        return "錯誤：找不到 SPREADSHEET_ID，請檢查 .env 檔案"
-
-    try:
-        today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        values = [[today, category, content, note]]
-        body = {'values': values}
-        
-        result = service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range="logs!A:D", # 確保你的分頁名稱真的是 logs
-            valueInputOption="USER_ENTERED",
-            body=body
-        ).execute()
-        
-        return f"已記錄到記憶庫：[{category}] {content}"
-        
-    except Exception as e:
-        # 這裡會捕捉真實錯誤 (例如 403 Forbidden, 404 Not Found)
-        return f"記錄失敗 (Error): {str(e)}"
-
 def read_sheet_data(sheet_name: str):
     """
     從記憶庫讀取特定的資料表（健身菜單或健康病歷）。
@@ -173,7 +147,7 @@ def read_sheet_data(sheet_name: str):
     if not service:
         return "錯誤：無法連線至 Google Sheets"
     
-    valid_sheets = ["training", "health_profile", "workout_history"]
+    valid_sheets = ["training", "health_profile", "workout_history", "food_properties", "recipes"]
     if sheet_name not in valid_sheets:
         return f"錯誤：不支援的頁籤名稱 '{sheet_name}'。僅支援: {valid_sheets}"
 
@@ -296,116 +270,151 @@ def log_workout_result(menu: str, rpe: int, note: str = ""):
     except Exception as e:
         return f"記錄失敗 (Error): {str(e)}"
 
-def read_recent_logs(limit: int = 20):
+def get_user_profile(domain: str = None):
     """
-    從記憶庫 (Google Sheets) 讀取最近的生活紀錄。
-    當用戶詢問「我最近做了什麼」、「幫我回顧本週」、「查看運動紀錄」時使用此工具。
+    讀取使用者的個人設定檔 (背景資訊、飲食習慣)。
     
     Args:
-        limit (int): 要讀取的筆數，預設為最近 20 筆。
+        domain (str): 篩選類別，例如 "Basic", "Diet"。若為 None 則回傳全部。
     """
     service = get_google_service('sheets', 'v4') 
-    if not service:
-        return "錯誤：無法連線至 Google Sheets"
-    
+    if not service: return "錯誤：無法連線至 Google Sheets"
+
     try:
-        # 1. 讀取整張表 (假設你的資料不會多到爆掉，目前先讀 A 到 D 欄)
+        # 假設分頁名稱已改為 user_profile
         result = service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
-            range="logs!A:D"
+            range="user_profile!A:D"
         ).execute()
         
         rows = result.get('values', [])
-        
-        if not rows:
-            return "記憶庫目前是空的。"
+        if not rows: return "設定檔是空的。"
 
-        # 2. 處理資料：保留標題列，並取得最後 N 筆
-        header = rows[0] # ['date', 'category', 'content', 'note']
-        data_rows = rows[1:] # 扣除標題剩下的資料
-        
-        # 取最後 limit 筆 (最新的資料通常在最下面)
-        recent_rows = data_rows[-limit:]
-        
-        # 3. 格式化成文字回傳給 Gemini
-        formatted_logs = "【最近的記憶紀錄】\n"
-        for row in recent_rows:
-            # 防呆機制：有些列可能沒填滿，用空字串補齊
-            while len(row) < 4:
-                row.append("")
+        formatted_text = "【使用者個人檔案】\n"
+        for row in rows[1:]: # 跳過標題
+            # 補齊欄位
+            while len(row) < 3: row.append("")
             
-            date, category, content, note = row[0], row[1], row[2], row[3]
-            formatted_logs += f"- [{date}] ({category}): {content} | {note}\n"
+            dom, attr, val = row[0], row[1], row[2]
             
-        return formatted_logs
+            # 篩選邏輯
+            if domain and domain.lower() not in dom.lower():
+                continue
+                
+            formatted_text += f"- [{dom}] {attr}: {val}\n"
+            
+        return formatted_text
 
     except Exception as e:
-        return f"讀取失敗 (Error): {str(e)}"
+        return f"讀取設定檔失敗: {str(e)}"
 
-def add_todo_task(title: str, notes: str = ""):
+def update_user_profile(domain: str, attribute: str, value: str):
     """
-    新增一項待辦事項到 Google Tasks (預設清單)。
-    適用於：雜事、購物清單、專案待辦、沒有確切執行時間的任務。
+    更新或新增個人設定檔。
+    適用於：設定飲食習慣、更新工作狀態。
+    """
+    service = get_google_service('sheets', 'v4') 
+    if not service: return "錯誤：無法連線至 Google Sheets"
+
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        values = [[domain, attribute, value, today]]
+        body = {'values': values}
+        
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="user_profile!A:D",
+            valueInputOption="USER_ENTERED",
+            body=body
+        ).execute()
+        
+        return f"已更新設定檔：[{domain}] {attribute} -> {value}"
+    except Exception as e:
+        return f"更新失敗: {str(e)}"
+
+def _get_tasklist_id(service, list_title: str):
+    """
+    (內部工具) 根據清單名稱尋找 ID。如果找不到，是否要自動建立？
+    目前策略：若找不到，回傳 None (避免 AI 亂創清單)。
+    """
+    try:
+        results = service.tasklists().list().execute()
+        items = results.get('items', [])
+        
+        # 1. 搜尋既有清單
+        for item in items:
+            if item['title'] == list_title:
+                return item['id']
+        
+        # 2. 特殊處理：預設清單
+        if list_title == "Default" or list_title == "@default":
+            return "@default"
+
+        return None
+    except Exception:
+        return None
+
+def add_todo_task(title: str, notes: str = "", list_name: str = "Default"):
+    """
+    新增待辦事項。
     
     Args:
-        title (str): 任務標題 (例如 "買牛奶", "修改 main.py").
-        notes (str): 備註或細節說明.
+        title (str): 標題。
+        notes (str): 備註。
+        list_name (str): 指定清單名稱，例如 "中期計畫" 或 "Default"。
     """
     service = get_google_service('tasks', 'v1') 
-    if not service:
-        return "錯誤：無法連線至 Google Tasks"
+    if not service: return "錯誤：無法連線 Google Tasks"
+
+    # 取得清單 ID
+    tasklist_id = _get_tasklist_id(service, list_name)
+    if not tasklist_id:
+        # 如果找不到該清單，為了防呆，預設存回主清單並標註
+        tasklist_id = "@default"
+        notes = f"[原欲存入: {list_name}] {notes}"
 
     try:
-        task_body = {
-            'title': title,
-            'notes': notes
-        }
-        
-        # '@default' 代表使用者的預設清單
-        result = service.tasks().insert(tasklist='@default', body=task_body).execute()
-        
-        return f"已建立待辦事項：{result.get('title')}"
-
+        task_body = {'title': title, 'notes': notes}
+        result = service.tasks().insert(tasklist=tasklist_id, body=task_body).execute()
+        return f"已建立任務於【{list_name}】：{result.get('title')}"
     except Exception as e:
-        return f"建立任務失敗 (Error): {str(e)}"
+        return f"建立失敗: {e}"
 
-def get_todo_tasks(max_results: int = 10):
+def get_todo_tasks(list_name: str = "Default", max_results: int = 10):
     """
-    查詢目前未完成的待辦事項。
-    當用戶問「我還有什麼事沒做？」、「查看待辦清單」時使用。
+    查詢待辦事項。
+    
+    Args:
+        list_name (str): "Default" (日常待辦) 或 "中期計畫" (或其他清單名稱)。
     """
     service = get_google_service('tasks', 'v1') 
-    if not service:
-        return "錯誤：無法連線至 Google Tasks"
+    if not service: return "錯誤：無法連線 Google Tasks"
+
+    tasklist_id = _get_tasklist_id(service, list_name)
+    if not tasklist_id:
+        return f"找不到名為 '{list_name}' 的清單，請確認 Google Tasks 上是否已建立。"
 
     try:
-        # showCompleted=False 代表只看沒做完的
         results = service.tasks().list(
-            tasklist='@default', 
+            tasklist=tasklist_id, 
             showCompleted=False, 
             maxResults=max_results
         ).execute()
         
         items = results.get('items', [])
-
         if not items:
-            return "目前沒有未完成的待辦事項，太棒了！"
+            return f"清單【{list_name}】目前沒有未完成項目。"
 
-        formatted_tasks = "【待辦事項清單】\n"
+        formatted_tasks = f"【{list_name} 清單】\n"
         for item in items:
             title = item.get('title')
             notes = item.get('notes', '')
-            # 如果有備註就顯示，沒有就不顯示
             note_str = f" ({notes})" if notes else ""
             formatted_tasks += f"• {title}{note_str}\n"
             
         return formatted_tasks
-
     except Exception as e:
-        return f"查詢任務失敗 (Error): {str(e)}"
-
-import requests
-from bs4 import BeautifulSoup
+        return f"查詢失敗: {e}"
 
 def save_to_inbox(url: str, note: str = ""):
     """

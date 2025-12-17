@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
@@ -9,11 +10,17 @@ import google.generativeai as genai
 import asyncio
 
 from tools import (
-    add_calendar_event, log_life_event, read_recent_logs, read_sheet_data,
+    add_calendar_event, update_user_profile, manage_user_profile, read_sheet_data,
     add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
     save_to_inbox, get_current_solar_term, get_weather_forecast,
-    add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content
+    add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content,
+    log_health_status
 )
+
+# --- 全域變數區 ---
+# 用來暫存使用者的對話 Session
+# 格式: { user_id: chat_session_object }
+user_sessions = {}
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -24,10 +31,11 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 my_tools = [
-    add_calendar_event, log_life_event, read_recent_logs, read_sheet_data,
+    add_calendar_event, update_user_profile, manage_user_profile, read_sheet_data,
     add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
     save_to_inbox, get_current_solar_term, get_weather_forecast,
-    add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content
+    add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content,
+    log_health_status
 ]
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -68,12 +76,13 @@ def get_system_instruction():
     【工具使用規範】
     你擁有存取用戶「人生資料庫」的權限，請靈活運用以下工具：
 
-    1. 日記區 (`log_life_event` / `read_recent_logs`):
-       - 用途：紀錄心情、飲食、靈感、社交活動、身體感受等「非健身/運動」的生活瑣事。例如：「最近好沒有精神」 -> 寫入。
-       - 注意：運動相關紀錄請交給「健身系統」處理，不要寫在這裡，以免資料分散。
-       - 當用戶詢問「我最近做了什麼」、「幫我回顧」時 -> 讀取。
-       - **重要策略**：當用戶要求建議（例如「我覺得最近很累」）時，請先**主動呼叫此工具**查看用戶最近的作息或心情紀錄，再根據紀錄給出個人化的建議，不要給出空泛的心靈雞湯。
-       - 這是「短期記憶」，應適時搭配其他靜態資料庫思考以回應。
+    1. 使用者個人檔案 (User Profile):
+       - 工具：`get_user_profile`, `update_user_profile`
+       - 用途：存放長期的使用者背景設定。
+       - **觸發情境**：
+          1. **飲食/習慣**：當用戶提到「我不吃...」或「我習慣...」時 -> 呼叫 `update_user_profile` 確認使用者習慣。
+          2. **決策輔助**：在給予任何建議前（如通勤、飲食），若不確定用戶偏好，請先呼叫 `get_user_profile` 確認背景資訊。
+          3. **主動側寫機制**：當你在對話中得知使用者的長期偏好、生活背景時，請主動呼叫 `update_user_profile` 寫入資料庫，無需刻意詢問。
 
     2. 健身系統 (Planning & Tracking):
        - 相關工具：`read_sheet_data`, `log_workout_result`, `add_calendar_event`, `get_upcoming_events`
@@ -135,7 +144,7 @@ def get_system_instruction():
     4. 待辦事項管理 (Google Tasks):
        - 工具：`add_todo_task`, `get_todo_tasks`
        - 用途：**「要做，但不用現在做」**的事情。
-       - 場景：專案進度追蹤、購物清單、雜事提醒。
+       - 場景：專案進度追蹤、購物清單、雜事提醒、中期計畫。
        - 範例：「提醒我之後要去全聯買蛋」 -> 使用 Tasks (因為沒說幾點去)。
     
     5. 行事曆管理 (Google Calendar)
@@ -201,24 +210,47 @@ def get_system_instruction():
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
-    user_name = update.effective_user.first_name
-    logger.info(f"User ({user_name}): {user_input}")
+    user_id = update.effective_user.id  # 取得使用者 ID
+    logger.info(f"User ({user_id}): {user_input}")
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-        # 啟動 Chat Session
-        # 這裡我們每次都動態建立 session 以確保指令是最新的
-        chat = model.start_chat(enable_automatic_function_calling=True)
-        
-        # 注入 System Instruction 與 時間
+        # 1. 取得 System Instruction (每次都拿最新的時間)
         system_prompt = get_system_instruction()
-        full_prompt = f"{system_prompt}\n\nUser Input: {user_input}"
 
-        response = chat.send_message(full_prompt)
+        # 2. 判斷是否已經有對話紀錄 (Session)
+        if user_id not in user_sessions:
+            # === 新對話 (或伺服器重啟後的第一句) ===
+            print(f"User {user_id}: 建立新對話 Session", flush=True)
+            
+            # 建立新的 Chat Session
+            # 注意：history=[] 代表從零開始
+            chat_session = model.start_chat(
+                history=[
+                    {"role": "user", "parts": [system_prompt]},
+                    {"role": "model", "parts": ["收到，我已準備好執行您的個人助理任務。"]} 
+                ],
+                enable_automatic_function_calling=True 
+            )
+            user_sessions[user_id] = chat_session
+        else:
+            # === 延續舊對話 ===
+            # 取出之前的 session 物件
+            chat_session = user_sessions[user_id]
+
+        # 3. 發送訊息 (現在是用 chat_session 來發送，它會自動記住上下文)
+        response = chat_session.send_message(user_input)
         ai_reply = response.text
         
-        # 簡單的格式清理
+        # 4. 強制轉換粗體：把 **文字** 換成 <b>文字</b>
+        # 這裡用正規表示式尋找成對的星號
+        ai_reply = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', ai_reply)
+
+        # 5. 強制轉換列表：把行首的 "- " 換成漂亮的圓點 "• "
+        ai_reply = ai_reply.replace("- ", "• ")
+
+        # 6. (既有的) 清理 HTML 標籤與 Code Block
         ai_reply = ai_reply.replace("```html", "").replace("```", "")
         ai_reply = ai_reply.replace("<br>", "\n").replace("<ul>", "").replace("</ul>", "").replace("<li>", "• ").replace("</li>", "")
         
@@ -228,10 +260,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ai_reply, parse_mode=ParseMode.HTML)
     
     except Exception as e:
-        logger.error(f"Error handling message: {e}")
-        # 如果 HTML 格式有錯 (例如標籤沒閉合)，Telegram 會報錯，這裡做個備援
-        # 嘗試用純文字重傳一次，避免讓用戶覺得機器人死掉了
-        await update.message.reply_text(f"排版解析失敗，轉為純文字模式：\n{ai_reply}")
+        # 如果發生錯誤 (例如 Session 過期或 Google API 錯誤)
+        logger.error(f"Error: {e}")
+        # 清除這個人的 Session，讓他下次重來
+        if user_id in user_sessions:
+            del user_sessions[user_id]
+        await update.message.reply_text("對話發生錯誤，已重置記憶。請再試一次。")
 
 if __name__ == '__main__':
     token = os.getenv("TELEGRAM_BOT_TOKEN")
