@@ -212,7 +212,15 @@ async def trigger_routine():
         from_user=mock_user, 
         text=message_text
     )
+    
+    # 將 Bot 綁定到偽造的 Message 上
+    # 這樣 update.message.reply_text() 才知道要用誰來發送
+    mock_message.set_bot(ptb_app.bot)
+
     mock_update = Update(update_id=0, message=mock_message)
+    
+    # 這裡也綁定一下比較保險
+    mock_update.set_bot(ptb_app.bot)
 
     # 丟進 PTB 處理
     await ptb_app.process_update(mock_update)
