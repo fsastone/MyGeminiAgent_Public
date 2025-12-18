@@ -166,6 +166,8 @@ def index():
 @flask_app.route(f'/{token}', methods=['POST'])
 async def telegram_webhook():
     """接收 Telegram 傳來的更新"""
+    if not ptb_app._initialized:
+        await ptb_app.initialize()
     update = Update.de_json(request.get_json(force=True), ptb_app.bot)
     await ptb_app.process_update(update)
     return "OK"
@@ -193,6 +195,9 @@ async def trigger_routine():
 
     logger.info(f"收到排程觸發: User={target_user_id}, Msg={message_text}")
 
+    if not ptb_app._initialized:
+        await ptb_app.initialize()
+    
     # 【黑魔法】：偽造一個 Telegram Update 物件
     # 這讓 handle_message 以為是使用者真的傳了這句話
     # 這樣我們就不需要重寫邏輯，Session、權限、格式處理通通沿用
