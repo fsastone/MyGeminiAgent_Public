@@ -2,12 +2,14 @@
 import os
 import re
 import logging
+import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-import asyncio
+import google.generativeai as genai
 
 # 引入重構後的模組
 from services.gemini_ai import initialize_gemini
@@ -20,10 +22,12 @@ from tools import (
 )
 
 # 全域設定
-user_sessions = {}
+load_dotenv()
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-load_dotenv()
+
+user_sessions = {}
+flask_app = Flask(__name__)
 
 # 定義工具列表 (供 Gemini 使用)
 my_tools = [
@@ -63,6 +67,10 @@ def get_system_instruction():
     - 內容是食譜相關 -> 額外提取資訊並呼叫 `add_recipe` 儲存。
     - 內容非食譜 -> 呼叫 `save_to_inbox` 儲存至 Inbox，並告知已抓取的標題與150字內摘要。
     
+    【特殊指令：定時排程】
+    當你收到以 **`[定時指令]`** 開頭的訊息時，這代表系統自動觸發的排程任務。
+    請忽略禮貌性用語，直接根據指令內容執行對應動作，並產出結構清晰的訊息。
+
     【情境反應指南】
     1. **早安/晨間喚醒 (Routine: Morning)**
        - 用戶說：「早安」、「晨間訊息」。
@@ -99,15 +107,18 @@ def get_system_instruction():
     """
     return instruction
 
+# --- Telegram 處理邏輯 ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
     user_id = update.effective_user.id
     logger.info(f"User ({user_id}): {user_input}")
 
     try:
+        # 顯示 "打字中..." 狀態
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
         system_prompt = get_system_instruction()
 
+        # Session 管理
         if user_id not in user_sessions:
             print(f"User {user_id}: 建立新對話 Session", flush=True)
             chat_session = model.start_chat(
@@ -121,10 +132,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             chat_session = user_sessions[user_id]
 
+        # 發送給 Gemini
         response = chat_session.send_message(user_input)
         ai_reply = response.text
         
-        # 格式轉換
+        # 格式轉換 (Markdown -> HTML)
         ai_reply = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', ai_reply)
         ai_reply = ai_reply.replace("- ", "• ")
         ai_reply = ai_reply.replace("```html", "").replace("```", "")
@@ -137,23 +149,85 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in user_sessions: del user_sessions[user_id]
         await update.message.reply_text("對話發生錯誤，已重置記憶。請再試一次。")
 
+# --- 初始化 Telegram App ---
+token = os.getenv("TELEGRAM_BOT_TOKEN")
+if not token: raise ValueError("TELEGRAM_BOT_TOKEN 未設定！")
+
+ptb_app = ApplicationBuilder().token(token).build()
+ptb_app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+# --- Flask 路由設定 ---
+
+@flask_app.route('/', methods=['GET'])
+def index():
+    return "Gemini Bot is Alive!"
+
+# 1. Telegram Webhook 入口
+@flask_app.route(f'/{token}', methods=['POST'])
+async def telegram_webhook():
+    """接收 Telegram 傳來的更新"""
+    update = Update.de_json(request.get_json(force=True), ptb_app.bot)
+    await ptb_app.process_update(update)
+    return "OK"
+
+# 2. GitHub Actions 排程入口 (關鍵新增)
+@flask_app.route('/trigger_routine', methods=['POST'])
+async def trigger_routine():
+    """
+    接收 GitHub Actions 的定時呼叫。
+    Payload 格式: {"user_id": 123456789, "message": "[定時指令] 早安"}
+    Header: {"X-API-KEY": "您的密鑰"}
+    """
+    # 簡單的資安驗證
+    api_key = request.headers.get("X-API-KEY")
+    server_key = os.getenv("GEMINI_API_KEY") # 為了方便，我們先借用 Gemini Key 當作驗證碼，您也可以另外設一個
+    if api_key != server_key:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json()
+    target_user_id = data.get("user_id")
+    message_text = data.get("message")
+
+    if not target_user_id or not message_text:
+        return jsonify({"error": "Missing params"}), 400
+
+    logger.info(f"收到排程觸發: User={target_user_id}, Msg={message_text}")
+
+    # 【黑魔法】：偽造一個 Telegram Update 物件
+    # 這讓 handle_message 以為是使用者真的傳了這句話
+    # 這樣我們就不需要重寫邏輯，Session、權限、格式處理通通沿用
+    from telegram import User, Chat, Message
+    
+    mock_user = User(id=target_user_id, first_name="Auto", is_bot=False)
+    mock_chat = Chat(id=target_user_id, type="private")
+    mock_message = Message(
+        message_id=0, 
+        date=datetime.now(), 
+        chat=mock_chat, 
+        from_user=mock_user, 
+        text=message_text
+    )
+    mock_update = Update(update_id=0, message=mock_message)
+
+    # 丟進 PTB 處理
+    await ptb_app.process_update(mock_update)
+
+    return jsonify({"status": "Triggered", "message": message_text})
+
+# --- 啟動伺服器 ---
 if __name__ == '__main__':
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token: raise ValueError("TELEGRAM_BOT_TOKEN 未設定！")
-        
-    mode = os.getenv("MODE", "polling") 
-    app = ApplicationBuilder().token(token).build()
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    port = int(os.environ.get("PORT", 8080))
+    webhook_url = os.getenv("WEBHOOK_URL")
+    
+    # 這裡只做一次設定
+    if webhook_url:
+        print(f"設定 Webhook: {webhook_url}/{token}")
+        # 注意：在 Flask 模式下，我們需要手動設定 webhook
+        # 但這裡為了避免 async 問題，我們通常建議手動用 curl 設定一次，
+        # 或者讓 Application 在啟動時設定。
+        # 簡單作法：透過 requests 同步設定
+        import requests
+        requests.get(f"https://api.telegram.org/bot{token}/setWebhook?url={webhook_url}/{token}")
 
-    print(f"Gemini Assistant 啟動中... 模式: {mode}", flush=True)
-
-    if mode == "webhook":
-        port = int(os.environ.get("PORT", 8080))
-        webhook_url = os.getenv("WEBHOOK_URL") 
-        if not webhook_url:
-            logger.warning("警告：WEBHOOK_URL 未設定！")
-            webhook_url = "https://example.com"
-        
-        app.run_webhook(listen="0.0.0.0", port=port, url_path=token, webhook_url=f"{webhook_url}/{token}")
-    else:
-        app.run_polling()
+    # 啟動 Flask
+    flask_app.run(host="0.0.0.0", port=port)
