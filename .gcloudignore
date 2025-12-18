@@ -8,3 +8,4 @@ __pycache__/
 test_brain.py
 test_interface.py
 test_yt.py
+old/
