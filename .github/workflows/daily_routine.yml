@@ -1,0 +1,63 @@
+name: Daily Routine Trigger
+
+on:
+  schedule:
+    # 注意：GitHub 使用 UTC 時間 (台灣是 UTC+8)
+    # 台灣 07:00 -> UTC 23:00 (前一天)
+    # 台灣 13:30 -> UTC 05:30
+    # 台灣 17:30 -> UTC 09:30
+    # 台灣 21:30 -> UTC 13:30
+    # 台灣週六 20:00 -> UTC 12:00
+
+    # 1. 每天早上 07:00 (前一天 23:00)
+    - cron: '0 23 * * *'
+    
+    # 2. 工作日中午 13:30 (週一到週五) -> UTC 05:30
+    - cron: '30 5 * * 1-5'
+
+    # 3. 工作日傍晚 17:30 (週一到週五) -> UTC 09:30
+    - cron: '30 9 * * 1-5'
+
+    # 4. 每天晚間 21:30 -> UTC 13:30
+    - cron: '30 13 * * *'
+
+    # 5. 每週六晚間 20:00 -> UTC 12:00
+    - cron: '0 12 * * 6'
+
+  # 允許手動觸發測試
+  workflow_dispatch:
+
+jobs:
+  trigger_bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Trigger Request
+        run: |
+          # 取得當前小時 (UTC) 以判斷要發送哪個指令
+          CURRENT_HOUR=$(date -u +%H)
+          CURRENT_MINUTE=$(date -u +%M)
+          
+          # 預設指令
+          MSG="[定時指令] 系統檢查"
+
+          # 邏輯判斷 (UTC 時間)
+          if [ "$CURRENT_HOUR" -eq "23" ]; then
+            MSG="[定時指令] 早安，晨間喚醒"
+          elif [ "$CURRENT_HOUR" -eq "05" ]; then
+            MSG="[定時指令] 午休結束，進度追蹤"
+          elif [ "$CURRENT_HOUR" -eq "09" ]; then
+            MSG="[定時指令] 下班了，工作總結與運動規劃"
+          elif [ "$CURRENT_HOUR" -eq "13" ]; then
+             MSG="[定時指令] 睡前準備與結算"
+          elif [ "$CURRENT_HOUR" -eq "12" ]; then
+             MSG="[定時指令] 下週天氣變化總結"
+          fi
+
+          echo "Sending message: $MSG"
+
+          # 使用 curl 發送 POST 請求
+          # 注意： secrets.SERVICE_URL, secrets.GEMINI_API_KEY, secrets.MY_USER_ID 需在 GitHub Secrets 設定
+          curl -X POST "${{ secrets.SERVICE_URL }}/trigger_routine" \
+          -H "Content-Type: application/json" \
+          -H "X-API-KEY: ${{ secrets.GEMINI_API_KEY }}" \
+          -d "{\"user_id\": ${{ secrets.MY_USER_ID }}, \"message\": \"$MSG\"}"
