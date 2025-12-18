@@ -24,3 +24,7 @@ steps:
 
 images:
   - 'asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/gemini-bot:latest'
+
+# 明確指定 Log 模式
+options:
+  logging: CLOUD_LOGGING_ONLY
