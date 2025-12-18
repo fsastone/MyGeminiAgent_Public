@@ -15,5 +15,5 @@ def initialize_gemini(tools_list):
     
     genai.configure(api_key=api_key)
     # 使用目前的 Flash 模型
-    model = genai.GenerativeModel('gemini-2.5-flash', tools=tools_list)
+    model = genai.GenerativeModel('gemini-3-flash-preview', tools=tools_list)
     return model
