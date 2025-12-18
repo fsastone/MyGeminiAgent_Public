@@ -1,0 +1,26 @@
+steps:
+  # 1. Build: 建立 Docker 映像檔
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/gemini-bot:latest', '.']
+
+  # 2. Push: 上傳映像檔到 Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/gemini-bot:latest']
+
+  # 3. Deploy: 更新 Cloud Run 服務
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'gemini-bot'
+      - '--image'
+      - 'asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/gemini-bot:latest'
+      - '--region'
+      - 'asia-east1'
+      - '--platform'
+      - 'managed'
+      # 注意：這裡不設定環境變數，它會自動繼承上次手動部屬時設定好的變數
+
+images:
+  - 'asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/gemini-bot:latest'

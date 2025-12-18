@@ -42,7 +42,7 @@ def get_weather_forecast(location: str = "臺北市"):
                 wx_icon = "☀️" if is_daytime else "🌙"
             pop_icon = "🌂" if pop_val == 0 else ("☂️" if pop_val <= 50 else "☔")
             
-            line = f"- {time_desc} {wx_icon}{wx_name} {pop_icon}{pop_val}% 🌡️{min_t} - {max_t}℃"
+            line = f"- {time_desc} {wx_icon}{wx_name} {pop_icon}{pop_val}% 🌡️{min_t} ~ {max_t}℃"
             report_lines.append(line)
             
         header = f"【{location}今日天氣】"
