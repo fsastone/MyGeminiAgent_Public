@@ -166,10 +166,21 @@ def index():
 @flask_app.route(f'/{token}', methods=['POST'])
 async def telegram_webhook():
     """接收 Telegram 傳來的更新"""
-    if not ptb_app._initialized:
-        await ptb_app.initialize()
-    update = Update.de_json(request.get_json(force=True), ptb_app.bot)
-    await ptb_app.process_update(update)
+    try:
+        # 每次請求都重新初始化，綁定當下的 Event Loop
+        if not ptb_app._initialized:
+            await ptb_app.initialize()
+
+        update = Update.de_json(request.get_json(force=True), ptb_app.bot)
+        await ptb_app.process_update(update)
+    except Exception as e:
+        logger.error(f"Webhook Error: {e}")
+    finally:
+        # 請求結束後關閉 App，釋放舊的 Event Loop
+        # 這樣下次請求時，就會重新 initialize 並綁定新的 Loop
+        if ptb_app._initialized:
+            await ptb_app.shutdown()
+            
     return "OK"
 
 # 2. GitHub Actions 排程入口 (關鍵新增)
@@ -195,35 +206,37 @@ async def trigger_routine():
 
     logger.info(f"收到排程觸發: User={target_user_id}, Msg={message_text}")
 
-    if not ptb_app._initialized:
-        await ptb_app.initialize()
-    
-    # 【黑魔法】：偽造一個 Telegram Update 物件
-    # 這讓 handle_message 以為是使用者真的傳了這句話
-    # 這樣我們就不需要重寫邏輯，Session、權限、格式處理通通沿用
-    from telegram import User, Chat, Message
-    
-    mock_user = User(id=target_user_id, first_name="Auto", is_bot=False)
-    mock_chat = Chat(id=target_user_id, type="private")
-    mock_message = Message(
-        message_id=0, 
-        date=datetime.now(), 
-        chat=mock_chat, 
-        from_user=mock_user, 
-        text=message_text
-    )
-    
-    # 將 Bot 綁定到偽造的 Message 上
-    # 這樣 update.message.reply_text() 才知道要用誰來發送
-    mock_message.set_bot(ptb_app.bot)
+    try:
+        # 每次請求都重新初始化
+        if not ptb_app._initialized:
+            await ptb_app.initialize()
 
-    mock_update = Update(update_id=0, message=mock_message)
-    
-    # 這裡也綁定一下比較保險
-    mock_update.set_bot(ptb_app.bot)
+        # 偽造 Update 物件
+        from telegram import User, Chat, Message
+        mock_user = User(id=target_user_id, first_name="Auto", is_bot=False)
+        mock_chat = Chat(id=target_user_id, type="private")
+        mock_message = Message(
+            message_id=0, 
+            date=datetime.now(), 
+            chat=mock_chat, 
+            from_user=mock_user, 
+            text=message_text
+        )
+        # 綁定 Bot
+        mock_message.set_bot(ptb_app.bot)
+        mock_update = Update(update_id=0, message=mock_message)
+        mock_update.set_bot(ptb_app.bot)
 
-    # 丟進 PTB 處理
-    await ptb_app.process_update(mock_update)
+        # 丟進 PTB 處理
+        await ptb_app.process_update(mock_update)
+        
+    except Exception as e:
+        logger.error(f"Trigger Error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        # 【關鍵修正】請求結束後關閉 App
+        if ptb_app._initialized:
+            await ptb_app.shutdown()
 
     return jsonify({"status": "Triggered", "message": message_text})
 

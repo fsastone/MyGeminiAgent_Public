@@ -49,4 +49,5 @@ def get_weather_forecast(location: str = "臺北市"):
         body = "\n".join(report_lines)
         return f"{header}\n{body}"
     except Exception as e:
+        print(f"❌ 天氣 API 報錯: {str(e)}", flush=True) 
         return f"天氣查詢失敗: {str(e)}"
