@@ -16,7 +16,7 @@ from services.gemini_ai import initialize_gemini
 from tools import (
     add_calendar_event, update_user_profile, get_user_profile, read_sheet_data,
     add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
-    save_to_inbox, get_current_solar_term, get_weather_forecast,
+    save_to_inbox, get_current_solar_term, get_weather_forecast, get_weekly_forecast,
     add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content,
     log_health_status
 )
@@ -33,7 +33,7 @@ flask_app = Flask(__name__)
 my_tools = [
     add_calendar_event, update_user_profile, get_user_profile, read_sheet_data,
     add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
-    save_to_inbox, get_current_solar_term, get_weather_forecast,
+    save_to_inbox, get_current_solar_term, get_weather_forecast, get_weekly_forecast,
     add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content,
     log_health_status
 ]
@@ -62,6 +62,10 @@ def get_system_instruction():
     - 查食材屬性/忌口 -> "food_properties"
     - 查食譜 -> "recipes"
     
+    呼叫待辦清單 `add_todo_task` 或 `get_todo_tasks` 時，`list_name` 參數**僅限**使用以下字串，嚴禁自行創造：
+    - 當日或兩日內應完成事項 -> "日常待辦"
+    - 靈感雛形、週末應完成事項 -> "中期計畫"
+
     【網址處理 (URL Handling)】
     當用戶傳送任何網址 (URL) 時，呼叫 `scrape_web_content(url)` 取得內容。
     - 內容是食譜相關 -> 額外提取資訊並呼叫 `add_recipe` 儲存。
@@ -86,7 +90,8 @@ def get_system_instruction():
        - **安排運動**：
          (1) 檢查恢復：呼叫 `read_sheet_data("workout_history")` 確認上次訓練日與部位。
          (2) 檢查體質：呼叫 `read_sheet_data("health_profile")` 若 HP<6 或氣虛，建議輕度運動。
-         (3) 排程：避開上次部位，從 `read_sheet_data("training")` 依「強度」挑選動作，呼叫 `add_calendar_event` 寫入行事曆。
+         (3) 檢查作息：呼叫 `get_user_profile(domain="Routine")` 確認平日上班與通勤時間。
+         (4) 排程：避開上次部位，從 `read_sheet_data("training")` 依「強度」挑選動作，避開上班與通勤時間，呼叫 `add_calendar_event` 寫入行事曆。
        - **結算運動**：
          (1) 用戶回報「練完了」。
          (2) 確認行事曆上的菜單 -> 詢問 RPE (1-10) -> 呼叫 `log_workout_result`。
@@ -240,20 +245,70 @@ async def trigger_routine():
 
     return jsonify({"status": "Triggered", "message": message_text})
 
-# --- 啟動伺服器 ---
+# --- 啟動伺服器 (加入本機啟動之polling模式) ---
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8080))
-    webhook_url = os.getenv("WEBHOOK_URL")
-    
-    # 這裡只做一次設定
-    if webhook_url:
-        print(f"設定 Webhook: {webhook_url}/{token}")
-        # 注意：在 Flask 模式下，我們需要手動設定 webhook
-        # 但這裡為了避免 async 問題，我們通常建議手動用 curl 設定一次，
-        # 或者讓 Application 在啟動時設定。
-        # 簡單作法：透過 requests 同步設定
-        import requests
-        requests.get(f"https://api.telegram.org/bot{token}/setWebhook?url={webhook_url}/{token}")
+    import argparse
+    import sys
 
-    # 啟動 Flask
-    flask_app.run(host="0.0.0.0", port=port)
+    # 1. 設定參數解析器
+    parser = argparse.ArgumentParser(description="Gemini Bot 啟動管理器")
+    parser.add_argument(
+        '--mode', 
+        type=str, 
+        default='webhook', 
+        choices=['webhook', 'polling'],
+        help='執行模式: webhook (雲端部署用) 或 polling (本機開發用)'
+    )
+    args = parser.parse_args()
+
+    # 2. 根據模式執行
+    if args.mode == 'polling':
+        print("🚀 啟動 Polling 模式 (本機開發)...")
+        print("⚠️ 注意：此模式下 Flask 網頁伺服器不會啟動，無法接收 GitHub Actions 定時指令。")
+
+        # 移除 Webhook (避免衝突)
+        # 雖然 run_polling 會嘗試刪除，但明確執行更保險
+        # 注意：這裡需要一個簡單的 loop 來執行 async 函式
+        async def delete_webhook_and_run():
+            if not ptb_app._initialized:
+                await ptb_app.initialize()
+            print("正在移除舊的 Webhook 設定...")
+            await ptb_app.bot.delete_webhook()
+            print("開始輪詢 (Polling)... 按 Ctrl+C 停止")
+            # 開始 Polling (這行會阻斷程式直到結束)
+            await ptb_app.updater.start_polling()
+            # 保持運行
+            while True:
+                await asyncio.sleep(1)
+
+        try:
+            # 使用 PTB 內建的 run_polling 便捷方法 (它封裝了上面的邏輯)
+            ptb_app.run_polling()
+        except Exception as e:
+            print(f"Polling 執行錯誤: {e}")
+
+    else:
+        # --- Webhook 模式 (雲端預設) ---
+        print("☁️ 啟動 Webhook 模式 (Flask Server)...")
+        
+        port = int(os.environ.get("PORT", 8080))
+        webhook_url = os.getenv("WEBHOOK_URL")
+        
+        # 設定 Webhook (利用 requests 同步設定，避免 async 複雜度)
+        if webhook_url and token:
+            print(f"正在設定 Webhook: {webhook_url}/{token}")
+            try:
+                import requests
+                # 設定 Webhook 網址
+                response = requests.get(f"https://api.telegram.org/bot{token}/setWebhook?url={webhook_url}/{token}")
+                if response.status_code == 200:
+                    print("✅ Webhook 設定成功")
+                else:
+                    print(f"❌ Webhook 設定失敗: {response.text}")
+            except Exception as e:
+                print(f"⚠️ 設定 Webhook 時發生錯誤: {e}")
+
+        # 啟動 Flask
+        # 注意：Cloud Run 環境通常會忽略 host 參數，但在本機測試若不想跳防火牆，
+        # 這裡其實也可以改為 '127.0.0.1'，但為了雲端相容性，保持 '0.0.0.0' 即可
+        flask_app.run(host="0.0.0.0", port=port)
