@@ -150,9 +150,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ai_reply, parse_mode=ParseMode.HTML)
     
     except Exception as e:
-        logger.error(f"Error handling message: {e}")
+        # 1. 先詳細紀錄最原始的錯誤原因 (這才是我們最想知道的)
+        logger.error(f"❌ 處理訊息時發生錯誤 (Original Error): {e}", exc_info=True)
+        
         if user_id in user_sessions: del user_sessions[user_id]
-        await update.message.reply_text("對話發生錯誤，已重置記憶。請再試一次。")
+        
+        # 2. 嘗試發送錯誤訊息給用戶 (加一層保護，避免網路連線失敗導致二次崩潰)
+        try:
+            await update.message.reply_text("對話發生錯誤，已重置記憶。請再試一次。")
+        except Exception as send_error:
+            # 如果連錯誤訊息都送不出去 (例如網路斷了)，就只寫 Log，不要讓程式崩潰
+            logger.error(f"⚠️ 無法發送錯誤通知 (Network/Send Error): {send_error}")
+
 
 # --- 初始化 Telegram App ---
 token = os.getenv("TELEGRAM_BOT_TOKEN")
