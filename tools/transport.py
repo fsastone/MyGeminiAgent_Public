@@ -4,6 +4,7 @@ import requests
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -97,7 +98,7 @@ def get_train_status(mode: str = "check", dep: str = None, arr: str = None):
     - dep: 出發站名稱 (如 "鶯歌"), 若未指定則參考 mode
     - arr: 抵達站名稱 (如 "台北"), 若未指定則參考 mode
     """
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
     target_date = now.strftime("%Y-%m-%d")
     
     # 1. 決定起訖站與時間範圍

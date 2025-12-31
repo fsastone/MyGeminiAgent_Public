@@ -1,6 +1,17 @@
 # 使用輕量級 Python 映像檔
 FROM python:3.10-slim
 
+# 【新增】設定時區環境變數
+ENV TZ=Asia/Taipei
+
+# 安裝時區資料 (因為 slim 版本可能精簡掉了，保險起見裝一下)
+# 並建立 /etc/localtime 連結
+RUN apt-get update && \
+    apt-get install -y tzdata && \
+    ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    apt-get clean
+
 # 設定工作目錄
 WORKDIR /app
 

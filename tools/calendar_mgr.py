@@ -1,6 +1,7 @@
 # tools/calendar_mgr.py
 from datetime import datetime, timedelta
 from services.google_api import get_google_service
+from zoneinfo import ZoneInfo
 
 def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60, description: str = ""):
     """在 Google 日曆上建立活動。"""
@@ -27,7 +28,7 @@ def get_upcoming_events(days: int = 1):
     if not service: return "錯誤：無法連線至 Google Calendar"
 
     try:
-        now = datetime.utcnow()
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
         time_min = now.isoformat() + 'Z'
         end_date = now + timedelta(days=days)
         time_max = end_date.isoformat() + 'Z'

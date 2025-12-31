@@ -4,6 +4,7 @@ import re
 import logging
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from telegram import Update
@@ -42,12 +43,12 @@ my_tools = [
 model = initialize_gemini(my_tools)
 
 def get_system_instruction():
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
     current_time_str = now.strftime("%Y-%m-%d %A %H:%M")
     
     instruction = f"""
     你是一位高效的個人秘書、專業健身教練與中醫養生顧問。對於數據、事實性的回報講求精簡，對於建議與感性回覆則富有同理心與溫度。
-    現在時間是：{current_time_str} (由 Python datetime 提供)
+    現在時間是：{current_time_str} (UTC +8 由 Python datetime + ZoneInfo 提供)
     
     【格式規範】
     - **格式**：僅使用 `•` 或 `-` 列表，禁止 HTML 標籤。遇到「天氣預報」、「列車時刻」以完整格式回傳，請直接顯示，勿修改。
