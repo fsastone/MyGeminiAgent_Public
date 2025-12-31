@@ -111,14 +111,14 @@ def get_train_status(mode: str = "check", dep: str = None, arr: str = None):
     
     elif mode == "routine_morning":
         origin, dest = "鶯歌", "台北"
-        start_time = datetime.strptime(f"{target_date} 07:40", "%Y-%m-%d %H:%M")
-        end_time = datetime.strptime(f"{target_date} 08:10", "%Y-%m-%d %H:%M")
+        start_time = datetime.strptime(f"{target_date} 07:40", "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Taipei"))
+        end_time = datetime.strptime(f"{target_date} 08:10", "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Taipei"))
         title = "上班通勤【鶯歌 >> 台北】"
     
     elif mode == "routine_evening":
         origin, dest = "台北", "鶯歌"
-        start_time = datetime.strptime(f"{target_date} 18:00", "%Y-%m-%d %H:%M")
-        end_time = datetime.strptime(f"{target_date} 18:50", "%Y-%m-%d %H:%M")
+        start_time = datetime.strptime(f"{target_date} 18:00", "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Taipei"))
+        end_time = datetime.strptime(f"{target_date} 18:50", "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Taipei"))
         title = "下班通勤【台北 >> 鶯歌】"
     
     else:
@@ -174,16 +174,15 @@ def get_train_status(mode: str = "check", dep: str = None, arr: str = None):
         
         # 轉成 datetime 比較
         try:
-            dep_dt = datetime.strptime(f"{target_date} {dep_str}", "%Y-%m-%d %H:%M")
+            dep_dt = datetime.strptime(f"{target_date} {dep_str}", "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Taipei"))
+            # 這裡計算 duration 因為是相減，只要 dep_dt 和 arr_dt 都有時區就沒問題，但為了保險，arr_dt 也加一下
+            # arr_str 可能是 16:08，需轉 datetime
+            arr_dt = datetime.strptime(f"{target_date} {arr_str}", "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Taipei"))
+            duration = int((arr_dt - dep_dt).total_seconds() / 60)
         except ValueError: continue # 跨日或格式錯誤跳過
         
         # 篩選時間
         if start_time <= dep_dt <= end_time:
-            # 計算行車時間
-            # arr_str 可能是 16:08，需轉 datetime
-            arr_dt = datetime.strptime(f"{target_date} {arr_str}", "%Y-%m-%d %H:%M")
-            duration = int((arr_dt - dep_dt).total_seconds() / 60)
-            
             # 誤點資訊
             delay_min = int(delay_map.get(train_no, 0))
             
