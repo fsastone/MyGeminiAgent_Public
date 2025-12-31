@@ -18,7 +18,7 @@ from tools import (
     add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
     save_to_inbox, get_current_solar_term, get_weather_forecast, get_weekly_forecast,
     add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content,
-    log_health_status
+    log_health_status, get_train_status
 )
 
 # 全域設定
@@ -35,7 +35,7 @@ my_tools = [
     add_todo_task, get_todo_tasks, log_workout_result, get_upcoming_events,
     save_to_inbox, get_current_solar_term, get_weather_forecast, get_weekly_forecast,
     add_recipe, get_unread_inbox, mark_inbox_as_read, scrape_web_content,
-    log_health_status
+    log_health_status, get_train_status
 ]
 
 # 初始化模型 (移至 services 處理)
@@ -50,7 +50,7 @@ def get_system_instruction():
     現在時間是：{current_time_str} (由 Python datetime 提供)
     
     【格式規範】
-    - **格式**：僅使用 `•` 或 `-` 列表，禁止 HTML 標籤。遇到「天氣預報」等完整格式回傳，請直接顯示，勿修改。
+    - **格式**：僅使用 `•` 或 `-` 列表，禁止 HTML 標籤。遇到「天氣預報」、「列車時刻」以完整格式回傳，請直接顯示，勿修改。
     - **多工**：若指令涉及多個面向（如「早安」），請一次呼叫所有相關工具。
     - **主動性**：從對話中得知用戶偏好（飲食、計畫）時，務必主動更新 `User Profile`。
     
@@ -74,15 +74,16 @@ def get_system_instruction():
     【特殊指令：定時排程】
     當你收到以 **`[定時指令]`** 開頭的訊息時，這代表系統自動觸發的排程任務。
     定時指令用於主動追蹤學習、工作專案進度，優先呼叫待辦清單與行事曆工具，精簡扼要產生結構清晰的彙整訊息。
+    上班時間通勤呼叫 `get_train_status(mode="routine_morning")` 下班通勤則呼叫 `get_train_status(mode="routine_evening")`。
     
     【情境反應指南】
-    1. **早安/晨間喚醒 (Routine: Morning)**
-       - 用戶說：「早安」、「晨間訊息」。
-       - 動作：同時呼叫 `get_weather_forecast`, `get_current_solar_term`, `get_upcoming_events(days=1)`, `get_todo_tasks`。
-       - 回覆：(1)天氣 (2)節氣 (3)今日行程 (4)重點待辦。
+    1. **晨間喚醒/下班總結 (Routine: Morning / Evening)**
+       - 用戶說：「早安」、「晨間訊息」、「下班了」。
+       - 動作：同時呼叫 `get_weather_forecast`, `get_current_solar_term`, `get_upcoming_events(days=1)`, `get_todo_tasks`, `get_train_status`。
+       - 回覆：(1)天氣 (2)節氣 (3)今日行程 (4)重點待辦 (5)火車時刻。
 
     2. **工作與專案 (Work & Tasks)**
-       - 用戶說：「進度」、「下班」、「午休結束」。
+       - 用戶說：「進度」、「行程」、「午休結束」。
        - 動作：同時呼叫 `get_todo_tasks`, `get_upcoming_events`。
        - 邏輯：盤點未完成事項，協助安排優先順序或延後至明日。
 
@@ -109,6 +110,10 @@ def get_system_instruction():
     6. **行程管理** (Google Calendar)
        - 用戶提及「約會」、「餐聚」、「會議」
        - 動作：呼叫 `get_upcoming_events` 確認無重複 -> 呼叫 `add_calendar_event` 新增行程並回報。
+    
+    7. **列車時刻查詢** (Train Status)
+       - 用戶問「列車動態」、「火車誤點」、「台北到鶯歌的列車」。
+       - 動作：呼叫 `get_train_status(mode="check", dep="出發站名", arr="抵達站名")`。工具已整理好資訊，以完整格式回傳。查詢站名務必簡化為兩字，未指定則預設呼叫 `get_train_status(mode="check")`。
     """
     return instruction
 
