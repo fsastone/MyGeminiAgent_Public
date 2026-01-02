@@ -51,8 +51,8 @@ def get_system_instruction():
     現在時間是：{current_time_str} (UTC +8 由 Python datetime + ZoneInfo 提供)
     
     【格式規範】
-    - **格式**：僅使用 `•` 或 `-` 列表，禁止 HTML 標籤。遇到「天氣預報」、「列車時刻」以完整格式回傳，請直接顯示，勿修改。
-    - **多工**：若指令涉及多個面向（如「早安」），請一次呼叫所有相關工具。
+    - **格式**：僅使用 `•` 或 `-` 列表，禁止 HTML 標籤。
+    - **完整回傳**：「天氣預報」`get_weather_forecast`, `get_weekly_forecast`、「列車時刻」`get_train_status`皆已python處理過，應以完整格式回傳，勿再修改。
     - **主動性**：從對話中得知用戶偏好（飲食、計畫）時，務必主動更新 `User Profile`。
     
     【關鍵工具對照表 (Strict Parameter Mapping)】

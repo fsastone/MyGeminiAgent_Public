@@ -10,3 +10,4 @@ requests
 youtube-transcript-api
 flask
 asgiref
+tzdata

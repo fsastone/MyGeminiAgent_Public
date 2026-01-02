@@ -29,9 +29,9 @@ def get_upcoming_events(days: int = 1):
 
     try:
         now = datetime.now(ZoneInfo("Asia/Taipei"))
-        time_min = now.isoformat() + 'Z'
+        time_min = now.isoformat()
         end_date = now + timedelta(days=days)
-        time_max = end_date.isoformat() + 'Z'
+        time_max = end_date.isoformat()
 
         events_result = service.events().list(
             calendarId='primary', timeMin=time_min, timeMax=time_max,
@@ -44,10 +44,22 @@ def get_upcoming_events(days: int = 1):
         formatted_events = f"【未來 {days} 天的行程】\n"
         for event in events:
             start = event['start'].get('dateTime', event['start'].get('date'))
+            
+            # 簡單格式化顯示
+            try:
+                # 嘗試轉成比較易讀的格式
+                if 'T' in start:
+                    dt_obj = datetime.fromisoformat(start)
+                    start_str = dt_obj.strftime("%m/%d %H:%M")
+                else:
+                    start_str = start # 全天行程通常是 YYYY-MM-DD
+            except:
+                start_str = start
+            
             summary = event.get('summary', '無標題')
             description = event.get('description', '')
             details = f" ({description})" if description else ""
-            formatted_events += f"• {start} | {summary}{details}\n"
+            formatted_events += f"• {start_str} | {summary}{details}\n"
             
         return formatted_events
     except Exception as e:
