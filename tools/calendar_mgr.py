@@ -3,8 +3,16 @@ from datetime import datetime, timedelta
 from services.google_api import get_google_service
 from zoneinfo import ZoneInfo
 
-def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60, description: str = ""):
-    """在 Google 日曆上建立活動。"""
+def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60, description: str = "", remind_minutes: int = 0):
+    """
+    在 Google 日曆上建立活動。
+    參數:
+    - summary: 活動標題
+    - start_time: 開始時間 (ISO 格式)
+    - duration_minutes: 持續時間
+    - description: 備註
+    - remind_minutes: 提前幾分鐘提醒 (例如 60 代表前一小時)。若為 0，則使用 Google 日曆的預設提醒。
+    """
     service = get_google_service('calendar', 'v3') 
     if not service: return "錯誤：無法連線至 Google Calendar"
 
@@ -16,9 +24,26 @@ def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60
             'description': description,
             'start': {'dateTime': start_time, 'timeZone': 'Asia/Taipei'},
             'end': {'dateTime': end_dt.isoformat(), 'timeZone': 'Asia/Taipei'},
+            'reminders': {'useDefault': True},
         }
+        # 如果有指定提醒時間，則覆寫預設值
+        if remind_minutes > 0:
+            event['reminders'] = {
+                'useDefault': False,
+                'overrides': [
+                    {'method': 'popup', 'minutes': remind_minutes}, # 手機/電腦跳出通知
+                    # 若想要 Email 提醒也可以加一行: {'method': 'email', 'minutes': remind_minutes}
+                ]
+            }
+
         created_event = service.events().insert(calendarId='primary', body=event).execute()
-        return f"成功建立活動：{created_event.get('htmlLink')}"
+        
+        remind_msg = " (使用預設提醒)"
+        if remind_minutes > 0:
+            remind_msg = f" (已設定 {remind_minutes} 分鐘前提醒)"
+            
+        return f"成功建立活動：{created_event.get('htmlLink')}{remind_msg}"
+        
     except Exception as e:
         return f"建立活動失敗: {e}"
 
