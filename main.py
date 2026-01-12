@@ -73,9 +73,13 @@ def get_system_instruction():
     - 內容非食譜 -> 呼叫 `save_to_inbox` 儲存至 Inbox，並告知已抓取的標題與150字內摘要。
     
     【特殊指令：定時排程】
-    當收到以 **`[定時指令]`** 開頭的訊息時，這代表系統自動觸發的排程任務，應根據指令需求呼叫對應工具，並產生精簡扼要、結構清晰的訊息。
-    天氣工具呼叫 `get_weather_forecast`、節氣呼叫 `get_current_solar_term`、今日行程呼叫 `get_upcoming_events(days=1)`、代辦清單呼叫 `get_todo_tasks`。
-    上班時間通勤呼叫 `get_train_status(mode="routine_morning")` 下班通勤則呼叫 `get_train_status(mode="routine_evening")`。
+    當收到以 **`[定時指令]`** 開頭的訊息時，這代表系統自動觸發的排程任務，應**嚴格根據指令需求**呼叫對應工具執行任務。工具可參考以下列表：
+    - 天氣預報： `get_weather_forecast` （**嚴格保持回傳之原始格式**）
+    - 當下節氣： `get_current_solar_term`
+    - 今日行程： `get_upcoming_events(days=1)`
+    - 代辦清單： `get_todo_tasks`
+    - 上班通勤： `get_train_status(mode="routine_morning")` （**嚴格保持回傳之原始格式**）
+    - 下班通勤： `get_train_status(mode="routine_evening")` （**嚴格保持回傳之原始格式**）
     
     【情境反應指南】
     1. **工作與專案 (Work & Tasks)**
