@@ -43,15 +43,15 @@ jobs:
 
           # 邏輯判斷 (UTC 時間)
           if [ "$CURRENT_HOUR" -eq "22" ]; then
-            MSG="[定時指令] 早安，晨間喚醒；請給出今日天氣、節氣、今日行程、重點日常待辦、火車時刻"
+            MSG="早安，晨間喚醒。請嚴格保持回傳之原始格式給出今日天氣 `get_weather_forecast`、節氣 `get_current_solar_term`、今日行程 `get_upcoming_events(days=1)`、重點日常待辦 `get_todo_tasks`、火車時刻 `get_train_status(mode="routine_morning")`"
           elif [ "$CURRENT_HOUR" -eq "05" ]; then
-            MSG="[定時指令] 午休結束，進度追蹤；請給出重點日常待辦、今日行程（若沒有行程則忽略）"
+            MSG="午休結束，進度追蹤；請嚴格保持回傳之原始格式給出今日天氣 `get_weather_forecast`、重點日常待辦 `get_todo_tasks`、今日行程 `get_upcoming_events(days=1)`（若沒有行程則忽略）"
           elif [ "$CURRENT_HOUR" -eq "09" ]; then
-            MSG="[定時指令] 下班了，工作總結與運動規劃；請給出重點日常待辦、中期計畫、火車時刻"
+            MSG="下班了，工作總結與運動規劃；請嚴格保持回傳之原始格式給出重點日常待辦 `get_todo_tasks`、中期計畫 `get_todo_tasks(list_name="中期計畫")`、火車時刻 `get_train_status(mode="routine_evening")`"
           elif [ "$CURRENT_HOUR" -eq "13" ]; then
-             MSG="[定時指令] 睡前準備與結算；請給出明日行程、重點日常待辦"
+             MSG="睡前準備與結算；請嚴格保持回傳之原始格式給出明日行程 `get_upcoming_events(days=2)`、重點日常待辦 `get_todo_tasks`"
           elif [ "$CURRENT_HOUR" -eq "11" ]; then
-             MSG="[定時指令] 下週天氣預報；**只需要**給出一周天氣預報資訊"
+             MSG="下週天氣預報；**只需要**給出一周天氣預報資訊 `get_weekly_forecast`"
           fi
 
           echo "Sending message: $MSG"

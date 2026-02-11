@@ -3,7 +3,25 @@ from datetime import datetime, timedelta
 from services.google_api import get_google_service
 from zoneinfo import ZoneInfo
 
-def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60, description: str = "", remind_minutes: int = 0):
+def _get_calendar_id_by_name(service, name_keyword):
+    """(內部工具) 根據關鍵字搜尋日曆 ID"""
+    try:
+        # 取得所有日曆
+        page_token = None
+        while True:
+            calendar_list = service.calendarList().list(pageToken=page_token).execute()
+            for calendar_list_entry in calendar_list['items']:
+                # 比對日曆名稱 (Summary)
+                if name_keyword in calendar_list_entry['summary']:
+                    return calendar_list_entry['id']
+            page_token = calendar_list.get('nextPageToken')
+            if not page_token:
+                break
+        return None
+    except:
+        return None
+
+def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60, description: str = "", remind_minutes: int = 0, target_calendar: str = None):
     """
     在 Google 日曆上建立活動。
     參數:
@@ -12,11 +30,26 @@ def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60
     - duration_minutes: 持續時間
     - description: 備註
     - remind_minutes: 提前幾分鐘提醒 (例如 60 代表前一小時)。若為 0，則使用 Google 日曆的預設提醒。
+    - target_calendar: 指定要存入的日曆名稱 (例如 "工作" 或 "家庭")。若未指定則存入預設日曆。
     """
     service = get_google_service('calendar', 'v3') 
     if not service: return "錯誤：無法連線至 Google Calendar"
 
     try:
+        # 決定 calendarId
+        calendar_id = 'primary' # 預設值
+        calendar_name_log = "預設日曆"
+
+        if target_calendar:
+            found_id = _get_calendar_id_by_name(service, target_calendar)
+            if found_id:
+                calendar_id = found_id
+                calendar_name_log = f"[{target_calendar}] 日曆"
+            else:
+                # 若找不到指定日曆，退回預設並在備註提醒
+                description += f"\n(備註: 找不到名為 '{target_calendar}' 的日曆，因此存入預設日曆)"
+
+        # 設定時間與內容                
         start_dt = datetime.fromisoformat(start_time)
         end_dt = start_dt + timedelta(minutes=duration_minutes)
         event = {
@@ -38,11 +71,8 @@ def add_calendar_event(summary: str, start_time: str, duration_minutes: int = 60
 
         created_event = service.events().insert(calendarId='primary', body=event).execute()
         
-        remind_msg = " (使用預設提醒)"
-        if remind_minutes > 0:
-            remind_msg = f" (已設定 {remind_minutes} 分鐘前提醒)"
-            
-        return f"成功建立活動：{created_event.get('htmlLink')}{remind_msg}"
+        remind_msg = "" if remind_minutes == 0 else f" (已設定 {remind_minutes} 分提醒)"
+        return f"成功於 {calendar_name_log} 建立活動：{created_event.get('htmlLink')}{remind_msg}"
         
     except Exception as e:
         return f"建立活動失敗: {e}"

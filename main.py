@@ -48,13 +48,19 @@ def get_system_instruction():
     
     instruction = f"""
     你是一位高效的個人秘書、專業健身教練與中醫養生顧問。對於數據、事實性的回報講求精簡，對於建議與感性回覆則富有同理心與溫度。
-    現在時間是：{current_time_str} (UTC +8 由 Python datetime + ZoneInfo 提供)
+    現在時間是：{current_time_str} (UTC +8)
     
     【格式規範】
     - **格式**：**禁止使用 Markdown 語法**。有排版需求使用 `•` 或 `-`。
     - **完整回傳**：「天氣預報」`get_weather_forecast`, `get_weekly_forecast`、「列車時刻」`get_train_status`python皆已處理過，**嚴格以完整格式回傳，勿再修改**。
     - **主動性**：從對話中得知用戶偏好（飲食、計畫）時，務必主動更新 `update_user_profile`。
     
+    【圖片發送規範】
+    「健身動作庫」`read_sheet_data("training")`與「食譜資料庫」`read_sheet_data("recipes")`中含有「圖片連結 (Image URL)」：
+    - python程式會自動偵測圖片標籤並清洗成正確格式發送。請勿在文字回應中直接顯示該網址。
+    - 請務必在回應的**最末端**加上標籤：`<<<IMG:圖片網址>>>`。
+    - 健身動作庫只有當用戶詢問特定動作時，才回傳圖片；預設不主動發送圖片；食譜資料庫主動搭配推薦食譜發送圖片。
+
     【關鍵工具對照表 (Strict Parameter Mapping)】
     呼叫 `read_sheet_data` 時，`sheet_name` 參數**僅限**使用以下字串，嚴禁自行創造：
     - 查健身動作庫 -> "training"
@@ -71,15 +77,6 @@ def get_system_instruction():
     當用戶傳送任何網址 (URL) 時，呼叫 `scrape_web_content(url)` 取得內容。
     - 內容是食譜相關 -> 額外提取資訊並呼叫 `add_recipe` 儲存。
     - 內容非食譜 -> 呼叫 `save_to_inbox` 儲存至 Inbox，並告知已抓取的標題與150字內摘要。
-    
-    【特殊指令：定時排程】
-    當收到以 **`[定時指令]`** 開頭的訊息時，這代表系統自動觸發的排程任務，應**嚴格根據指令需求**呼叫對應工具執行任務。工具可參考以下列表：
-    - 天氣預報： `get_weather_forecast` （**嚴格保持回傳之原始格式**）
-    - 當下節氣： `get_current_solar_term`
-    - 今日行程： `get_upcoming_events(days=1)`
-    - 代辦清單： `get_todo_tasks`
-    - 上班通勤： `get_train_status(mode="routine_morning")` （**嚴格保持回傳之原始格式**）
-    - 下班通勤： `get_train_status(mode="routine_evening")` （**嚴格保持回傳之原始格式**）
     
     【情境反應指南】
     1. **工作與專案 (Work & Tasks)**
@@ -117,6 +114,22 @@ def get_system_instruction():
     """
     return instruction
 
+def convert_drive_link(url):
+    """
+    將 Google Drive 分享連結轉換為直連下載連結 (Direct Link)。
+    適用於: https://drive.google.com/file/d/{FILE_ID}/view...
+    轉為: https://drive.google.com/uc?export=view&id={FILE_ID}
+    """
+    if "drive.google.com" in url and "/file/d/" in url:
+        try:
+            # 提取 File ID
+            # 常見格式: .../file/d/1A2B3C.../view?usp=sharing
+            file_id = url.split("/file/d/")[1].split("/")[0]
+            return f"https://drive.google.com/uc?export=view&id={file_id}"
+        except:
+            return url # 解析失敗則回傳原網址試試看
+    return url
+
 # --- Telegram 處理邏輯 ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
@@ -151,8 +164,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_reply = ai_reply.replace("- ", "• ")
         ai_reply = ai_reply.replace("```html", "").replace("```", "")
         ai_reply = ai_reply.replace("<br>", "\n").replace("<ul>", "").replace("</ul>", "").replace("<li>", "• ").replace("</li>", "")
+
+        # 檢查是否有圖片標籤 <<<IMG:url>>>
+        image_url = None
+        # 使用 Regex 抓取標籤
+        img_match = re.search(r'<<<IMG:(.*?)>>>', ai_reply)
         
+        if img_match:
+            raw_url = img_match.group(1).strip()
+            # 轉換 Google Drive 連結
+            image_url = convert_drive_link(raw_url)
+            # 將標籤從文字回應中移除，避免使用者看到一串網址
+            ai_reply = ai_reply.replace(img_match.group(0), "").strip()
+        
+        # 發送回覆
         await update.message.reply_text(ai_reply, parse_mode=ParseMode.HTML)
+        # 如果有抓到圖片，隨後發送圖片
+        if image_url:
+            try:
+                # 再次顯示 "上傳照片中..." 狀態
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO)
+                await update.message.reply_photo(photo=image_url)
+            except Exception as img_e:
+                logger.error(f"發送圖片失敗: {img_e} (URL: {image_url})")
+                # 圖片發送失敗不影響流程，但可以記錄 Log
     
     except Exception as e:
         # 1. 先詳細紀錄最原始的錯誤原因 (這才是我們最想知道的)

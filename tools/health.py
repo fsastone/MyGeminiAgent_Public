@@ -12,21 +12,28 @@ def read_sheet_data(sheet_name: str):
 
     try:
         range_name = f"{sheet_name}!A:E"
-        # 針對 recipes 多讀一欄
-        if sheet_name == "recipes": range_name = f"{sheet_name}!A:F"
-            
+        # 個別設定讀取欄位
+        if sheet_name == "recipes": range_name = f"{sheet_name}!A:G"
+        elif sheet_name == "food_properties": range_name = f"{sheet_name}!A:D"
+
         result = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=range_name).execute()
         rows = result.get('values', [])
         if not rows: return f"頁籤 '{sheet_name}' 是空的。"
+        # 避開標題列
         data_rows = rows[1:]
         
         formatted_text = f"【資料庫讀取：{sheet_name}】\n"
         
         if sheet_name == "training":
-            formatted_text += "格式：[肌群] 動作名稱 (強度/10) - 注意事項\n"
+            # 欄位：[0]部位, [1]動作, [2]強度, [3]備註, [4]圖片連結
+            formatted_text += "格式：[肌群] 動作名稱 (強度:/10) : 注意事項 | IMG_URL\n"
             for row in data_rows:
-                while len(row) < 4: row.append("")
-                formatted_text += f"- [{row[0]}] {row[1]} (強度:{row[2]}) : {row[3]}\n"
+                # 補齊空欄位避免 index out of range
+                while len(row) < 5: row.append("")
+                # 讀取圖片欄位 E 欄 [4]
+                img_url = row[4].strip()
+                img_info = f" | IMG_URL: {img_url}" if img_url else ""
+                formatted_text += f"- [{row[0]}] {row[1]} (強度:{row[2]}) : {row[3]} | {img_info}\n"
                 
         elif sheet_name == "health_profile":
             formatted_text += "格式：日期 | HP | 體質 | 變化 | 細節\n"
@@ -47,10 +54,14 @@ def read_sheet_data(sheet_name: str):
                 formatted_text += f"- {row[0]}: {row[1]} (RPE:{row[2]}) | 建議:{row[3]}\n"
         
         elif sheet_name == "recipes":
-            formatted_text += "格式：名稱 - 主食材 - 季節 - 標籤 - 連結 - 備註\n"
+            # 欄位：[0]菜名, [1]主食材, [2]季節, [3]標籤, [4]食譜連結, [5]圖片連結, [6]備註
+            formatted_text += "格式：菜名 (食材 / 季節/ 標籤) - 連結 | IMG_URL\n"
             for row in data_rows:
                 while len(row) < 6: row.append("")
-                formatted_text += f"- {row[0]}: {row[1]} (季節:{row[2]}, 標籤:{row[3]}) 連結: {row[4]} 備註: {row[5]}\n"
+                # 讀取圖片欄位 F 欄 [5]
+                img_url = row[5].strip()
+                img_info = f" | IMG_URL: {img_url}" if img_url else ""
+                formatted_text += f"- {row[0]} ({row[1]} / {row[2]} / {row[3]}) - {row[4]} | {img_info}\n"
         return formatted_text
     except Exception as e: return f"讀取失敗 (Error): {str(e)}"
 
@@ -125,7 +136,7 @@ def add_recipe(name: str, main_ing: str, season: str, tags: str, link: str, note
         values = [[name, main_ing, season, tags, link, note]]
         body = {'values': values}
         service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID, range="recipes!A:F",
+            spreadsheetId=SPREADSHEET_ID, range="recipes!A:G",
             valueInputOption="USER_ENTERED", body=body
         ).execute()
         return f"🍽️ 食譜已登錄：{name}"
