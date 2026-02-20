@@ -44,19 +44,19 @@ jobs:
           # 邏輯判斷 (UTC 時間)
           # [晨間喚醒] 預計 UTC 22:52 觸發，可能跨到 23 時
           if [ "$CURRENT_HOUR" -eq "22" ] || [ "$CURRENT_HOUR" -eq "23" ]; then
-            MSG="早安，晨間喚醒。請嚴格保持回傳之原始格式給出今日天氣 `get_weather_forecast`、節氣 `get_current_solar_term`、今日行程 `get_upcoming_events(days=1)`、重點日常待辦 `get_todo_tasks`、火車時刻 `get_train_status(mode="routine_morning")`"
+            MSG="早安，晨間喚醒。請嚴格保持回傳之原始格式給出今日天氣 \`get_weather_forecast\`、節氣 \`get_current_solar_term\`、今日行程 \`get_upcoming_events(days=1)\`、重點日常待辦 \`get_todo_tasks\`、火車時刻 \`get_train_status(mode="routine_morning")\`"
           # [午休結束] 預計 UTC 05:23 觸發，可能跨到 06 時
           elif [ "$CURRENT_HOUR" -eq "05" ] || [ "$CURRENT_HOUR" -eq "06" ]; then
-            MSG="午休結束，進度追蹤；請嚴格保持回傳之原始格式給出今日天氣 `get_weather_forecast`、重點日常待辦 `get_todo_tasks`、今日行程 `get_upcoming_events(days=1)`（若沒有行程則忽略）"
+            MSG="午休結束，進度追蹤；請嚴格保持回傳之原始格式給出今日天氣 \`get_weather_forecast\`、重點日常待辦 \`get_todo_tasks\`、今日行程 \`get_upcoming_events(days=1)\`（若沒有行程則忽略）"
           # [下班通勤] 預計 UTC 09:18 觸發，可能跨到 10 時
           elif [ "$CURRENT_HOUR" -eq "09" ] || [ "$CURRENT_HOUR" -eq "10" ]; then
-            MSG="下班了，工作總結與運動規劃；請嚴格保持回傳之原始格式給出重點日常待辦 `get_todo_tasks`、中期計畫 `get_todo_tasks(list_name="中期計畫")`、火車時刻 `get_train_status(mode="routine_evening")`"
+            MSG="下班了，工作總結與運動規劃；請嚴格保持回傳之原始格式給出重點日常待辦 \`get_todo_tasks\`、中期計畫 \`get_todo_tasks(list_name="中期計畫")\`、火車時刻 \`get_train_status(mode="routine_evening")\`"
           # [睡前準備] 預計 UTC 13:18 觸發，可能跨到 14 時
           elif [ "$CURRENT_HOUR" -eq "13" ] || [ "$CURRENT_HOUR" -eq "14" ]; then
-             MSG="睡前準備與結算；請嚴格保持回傳之原始格式給出明日行程 `get_upcoming_events(days=2)`、重點日常待辦 `get_todo_tasks`"
+             MSG="睡前準備與結算；請嚴格保持回傳之原始格式給出明日行程 \`get_upcoming_events(days=2)\`、重點日常待辦 \`get_todo_tasks\`"
           # [一週天氣] 預計 UTC 11:51 觸發，可能跨到 12 時
           elif [ "$CURRENT_HOUR" -eq "11" ] || [ "$CURRENT_HOUR" -eq "12" ]; then
-             MSG="下週天氣預報；**只需要**給出一周天氣預報資訊 `get_weekly_forecast`"
+             MSG="下週天氣預報；**只需要**給出一周天氣預報資訊 \`get_weekly_forecast\`"
           fi
 
           echo "Sending message: $MSG"
